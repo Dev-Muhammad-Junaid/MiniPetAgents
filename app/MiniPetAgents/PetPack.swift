@@ -63,19 +63,52 @@ struct PetPack {
                        metadata: metadata, frames: frames, previewFrame: preview)
     }
 
-    /// macOS Sonoma has built-in WebP via ImageIO. Fall back to NSImage for png.
+    /// macOS Sonoma has built-in WebP via ImageIO, but WebP decode is
+    /// noticeably slower than PNG. We cache the decoded sheet as
+    /// `spritesheet.cached.png` next to the source and reuse it on
+    /// subsequent launches when the source hasn't changed.
     private static func loadImage(at url: URL) -> CGImage? {
-        guard let src = CGImageSourceCreateWithURL(url as CFURL, nil),
-              let img = CGImageSourceCreateImageAtIndex(src, 0, nil) else {
-            // Fallback: NSImage may handle types ImageIO can't.
-            if let ns = NSImage(contentsOf: url),
-               let tiff = ns.tiffRepresentation,
-               let rep = NSBitmapImageRep(data: tiff) {
-                return rep.cgImage
+        let isWebP = url.pathExtension.lowercased() == "webp"
+        let cacheURL = url.deletingPathExtension().appendingPathExtension("cached.png")
+        let fm = FileManager.default
+
+        // Try cache first.
+        if isWebP, fm.fileExists(atPath: cacheURL.path) {
+            let srcDate = (try? fm.attributesOfItem(atPath: url.path))?[.modificationDate] as? Date
+            let cacheDate = (try? fm.attributesOfItem(atPath: cacheURL.path))?[.modificationDate] as? Date
+            if let s = srcDate, let c = cacheDate, c >= s,
+               let cached = decodeImageIO(at: cacheURL) {
+                return cached
             }
-            return nil
+        }
+
+        guard let img = decodeImageIO(at: url) ?? decodeViaNSImage(at: url) else { return nil }
+
+        // Persist a PNG cache for next launch (fire-and-forget; the user
+        // already has the decoded image in hand for this run).
+        if isWebP {
+            DispatchQueue.global(qos: .utility).async { writePNG(img, to: cacheURL) }
         }
         return img
+    }
+
+    private static func decodeImageIO(at url: URL) -> CGImage? {
+        guard let src = CGImageSourceCreateWithURL(url as CFURL, nil),
+              let img = CGImageSourceCreateImageAtIndex(src, 0, nil) else { return nil }
+        return img
+    }
+
+    private static func decodeViaNSImage(at url: URL) -> CGImage? {
+        guard let ns = NSImage(contentsOf: url),
+              let tiff = ns.tiffRepresentation,
+              let rep = NSBitmapImageRep(data: tiff) else { return nil }
+        return rep.cgImage
+    }
+
+    private static func writePNG(_ image: CGImage, to url: URL) {
+        guard let dest = CGImageDestinationCreateWithURL(url as CFURL, "public.png" as CFString, 1, nil) else { return }
+        CGImageDestinationAddImage(dest, image, nil)
+        _ = CGImageDestinationFinalize(dest)
     }
 
     /// Crop the spritesheet into per-state frame arrays based on metadata.

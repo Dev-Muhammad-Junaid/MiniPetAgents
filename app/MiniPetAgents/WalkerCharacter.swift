@@ -204,6 +204,15 @@ class WalkerCharacter {
     var hopEndTime: CFTimeInterval = 0
     /// Where the hop started, in window-frame coordinates. Used to interpolate the sin-curve y offset.
     var hopBaseY: CGFloat = 0
+    /// True while the cursor is over the pet. Drives a continuous wave-and-bounce.
+    var isHovering: Bool = false
+    /// CACurrentMediaTime() at which hover began — phase reference for the sin curves.
+    var hoverStartTime: CFTimeInterval = 0
+    /// CACurrentMediaTime() at which the most recent edge-bump squash should end.
+    var bumpEndTime: CFTimeInterval = 0
+    private static let bumpDuration: CFTimeInterval = 0.25
+    /// Last `notifyGreet` time, to suppress repeated triggers during one near-pass.
+    var lastGreetTime: CFTimeInterval = 0
 
     enum SpriteStateSource {
         case session   // wired session callbacks (text/turnComplete/error/toolUse)
@@ -996,11 +1005,15 @@ class WalkerCharacter {
         let atDockEdge = placement == .dock && (positionProgress >= 0.96 || positionProgress <= 0.04)
 
         if spriteState == .walk || spriteState == .run {
-            if atDockEdge, Double.random(in: 0...1) < 0.7 {
-                // Happy hop at the bounce point.
-                setSpriteState(.happy, source: .planner)
-                pauseEndTime = now + Double.random(in: 1.0...1.6)
-                return
+            if atDockEdge {
+                // Edge bump: squash + stretch transform regardless of mood.
+                triggerEdgeBump()
+                if Double.random(in: 0...1) < 0.7 {
+                    // Happy hop at the bounce point.
+                    setSpriteState(.happy, source: .planner)
+                    pauseEndTime = now + Double.random(in: 1.0...1.6)
+                    return
+                }
             }
             setSpriteState(.idle, source: .planner)
         }
@@ -1012,16 +1025,66 @@ class WalkerCharacter {
         pauseEndTime = now + delay
     }
 
-    func updateFlip() {
+    /// Compose the sprite-layer transform from three layers:
+    /// 1. Direction flip (mirror if `!goingRight`)
+    /// 2. Hover wave (small rotation sin curve while `isHovering`)
+    /// 3. Edge-bump squash (horizontal compress + vertical stretch, decays
+    ///    over `bumpDuration` from `bumpEndTime`)
+    /// Wrapped in `CATransaction.setDisableActions(true)` so changes never fade.
+    func applySpriteTransform(now: CFTimeInterval = CACurrentMediaTime()) {
+        var t = CATransform3DIdentity
+        if !goingRight { t = CATransform3DScale(t, -1, 1, 1) }
+
+        if isHovering {
+            // ~6° wave at ~5 Hz — playful but not seizure-inducing.
+            let phase = (now - hoverStartTime) * 5.0
+            let angle = sin(phase * 2 * .pi) * (6.0 * .pi / 180.0)
+            t = CATransform3DRotate(t, CGFloat(angle), 0, 0, 1)
+        }
+
+        if bumpEndTime > now {
+            let remaining = bumpEndTime - now
+            let s = CGFloat(remaining / Self.bumpDuration)            // 1→0
+            let amp: CGFloat = 0.18 * s                               // peak 18%
+            t = CATransform3DScale(t, 1 + amp, 1 - amp, 1)            // wide+short
+        }
+
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        if goingRight {
-            spriteLayer.transform = CATransform3DIdentity
-        } else {
-            spriteLayer.transform = CATransform3DMakeScale(-1, 1, 1)
-        }
+        spriteLayer.transform = t
         spriteLayer.frame = CGRect(x: 0, y: 0, width: displayWidth, height: displayHeight)
         CATransaction.commit()
+    }
+
+    /// Existing call sites still work — direction-only flip is now a thin
+    /// wrapper that goes through the unified transform pipeline.
+    func updateFlip() { applySpriteTransform() }
+
+    // MARK: - Hover wave
+
+    func beginHover() {
+        guard !isHovering else { return }
+        isHovering = true
+        hoverStartTime = CACurrentMediaTime()
+    }
+
+    func endHover() {
+        isHovering = false
+        applySpriteTransform()
+    }
+
+    /// Vertical hover-bounce offset added to the pet's y origin while hovering.
+    /// Smaller than the completion hop so it reads as continuous bouncing.
+    func hoverBounceOffset(now: CFTimeInterval) -> CGFloat {
+        guard isHovering else { return 0 }
+        let phase = (now - hoverStartTime) * 4.0
+        let amp = displayHeight * 0.05
+        return amp * CGFloat(abs(sin(phase * .pi)))      // bounce, never negative
+    }
+
+    /// Trigger a brief squash/stretch — used for dock-edge bumps.
+    func triggerEdgeBump() {
+        bumpEndTime = CACurrentMediaTime() + Self.bumpDuration
     }
 
     var currentFlipCompensation: CGFloat { goingRight ? 0 : flipXOffset }
@@ -1110,7 +1173,7 @@ class WalkerCharacter {
                 let travelDistance = currentTravelDistance
                 let x = dockX + travelDistance * positionProgress + currentFlipCompensation
                 let bottomPadding = displayHeight * 0.15
-                let y = dockTopY - bottomPadding + yOffset + happyHopOffset(now: now)
+                let y = dockTopY - bottomPadding + yOffset + happyHopOffset(now: now) + hoverBounceOffset(now: now)
                 window.setFrameOrigin(NSPoint(x: x, y: y))
                 updateThinkingBubble()
                 return
@@ -1135,7 +1198,7 @@ class WalkerCharacter {
 
             let x = dockX + travelDistance * positionProgress + currentFlipCompensation
             let bottomPadding = displayHeight * 0.15
-            let y = dockTopY - bottomPadding + yOffset + happyHopOffset(now: now)
+            let y = dockTopY - bottomPadding + yOffset + happyHopOffset(now: now) + hoverBounceOffset(now: now)
             window.setFrameOrigin(NSPoint(x: x, y: y))
         }
 

@@ -39,6 +39,11 @@ final class InstalledPet {
         cachedPack = pack
         return pack
     }
+
+    /// Drop the in-memory frame arrays. Called when a pet is despawned so
+    /// inactive pets don't keep their decoded sprite sheets resident.
+    /// Next `loadPack()` will reload from disk (now PNG-cached and fast).
+    func releasePack() { cachedPack = nil }
 }
 
 /// Discovers installed pets in `~/.codex/pets/` and watches the directory
@@ -72,6 +77,22 @@ final class PetLibrary {
     static var rootURL: URL {
         let home = FileManager.default.homeDirectoryForCurrentUser
         return home.appendingPathComponent(".codex/pets", isDirectory: true)
+    }
+
+    /// Delete the pet's folder and clean up its UserDefaults. The caller is
+    /// responsible for first telling the controller to despawn the pet.
+    /// Returns `true` if the folder was removed.
+    @discardableResult
+    static func uninstall(slug: String) -> Bool {
+        let url = rootURL.appendingPathComponent(slug, isDirectory: true)
+        let removed = (try? FileManager.default.removeItem(at: url)) != nil
+        // Drop any per-pet preferences too; rescan() also prunes orphans
+        // but that runs after the folder is gone.
+        for suffix in perPetKeySuffixes {
+            UserDefaults.standard.removeObject(forKey: "pet.\(slug).\(suffix)")
+        }
+        shared.rescan()
+        return removed
     }
 
     func pet(slug: String) -> InstalledPet? {

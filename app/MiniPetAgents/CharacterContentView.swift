@@ -52,8 +52,14 @@ class CharacterContentView: NSView {
         }
     }
 
-    override func mouseEntered(with event: NSEvent) { applyCursor() }
-    override func mouseExited(with event: NSEvent)  { NSCursor.arrow.set() }
+    override func mouseEntered(with event: NSEvent) {
+        applyCursor()
+        character?.beginHover()
+    }
+    override func mouseExited(with event: NSEvent) {
+        NSCursor.arrow.set()
+        character?.endHover()
+    }
     override func cursorUpdate(with event: NSEvent) { applyCursor() }
 
     override func hitTest(_ point: NSPoint) -> NSView? {

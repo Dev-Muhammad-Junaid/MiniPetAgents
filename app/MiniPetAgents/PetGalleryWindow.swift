@@ -56,6 +56,8 @@ struct PetGalleryView: View {
             if pets.isEmpty {
                 emptyState
             } else {
+                columnHeader
+                Divider()
                 ScrollView {
                     LazyVStack(spacing: 0) {
                         ForEach(pets, id: \.slug) { pet in
@@ -77,36 +79,53 @@ struct PetGalleryView: View {
     }
 
     private var installerBar: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "sparkles")
-            TextField("Install pet by slug (e.g. noir-webling)", text: $installSlug)
-                .textFieldStyle(.roundedBorder)
-                .onSubmit(triggerInstall)
-                .disabled(isInstalling)
-            Button(isInstalling ? "Installing…" : "Install") { triggerInstall() }
-                .disabled(installSlug.trimmingCharacters(in: .whitespaces).isEmpty || isInstalling)
-            Button("Browse petdex.crafter.run") {
-                if let url = URL(string: "https://petdex.crafter.run/") { NSWorkspace.shared.open(url) }
-            }
-            .buttonStyle(.link)
-        }
-        .padding(12)
-        .background(Color(NSColor.windowBackgroundColor))
-        .overlay(alignment: .bottomLeading) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Tip: drag a spawned pet anywhere on screen to reposition it; click once to open its chat. Pets resume walking after you drop them.")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-                if !installLog.isEmpty {
-                    Text(installLog)
-                        .font(.system(.caption, design: .monospaced))
-                        .lineLimit(2)
-                        .foregroundStyle(.secondary)
+        // Three stacked rows so nothing overlaps. Top: install field +
+        // buttons. Middle: usage tip (small, muted). Bottom: install log
+        // (only shown while installing or after the most recent run).
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Image(systemName: "sparkles")
+                TextField("Install pet by slug (e.g. noir-webling)", text: $installSlug)
+                    .textFieldStyle(.roundedBorder)
+                    .onSubmit(triggerInstall)
+                    .disabled(isInstalling)
+                Button(isInstalling ? "Installing…" : "Install") { triggerInstall() }
+                    .disabled(installSlug.trimmingCharacters(in: .whitespaces).isEmpty || isInstalling)
+                Button("Browse petdex.crafter.run") {
+                    if let url = URL(string: "https://petdex.crafter.run/") { NSWorkspace.shared.open(url) }
                 }
+                .buttonStyle(.link)
             }
-            .padding(.horizontal, 12)
-            .padding(.bottom, 4)
+            Text("Drag a spawned pet anywhere on screen; click to open its chat. Pets resume walking after you drop them.")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+            if !installLog.isEmpty {
+                Text(installLog)
+                    .font(.system(.caption, design: .monospaced))
+                    .lineLimit(2)
+                    .truncationMode(.tail)
+                    .foregroundStyle(.secondary)
+            }
         }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(NSColor.windowBackgroundColor))
+    }
+
+    private var columnHeader: some View {
+        HStack(spacing: 12) {
+            Spacer().frame(width: 48)            // preview column
+            Text("PET").frame(maxWidth: .infinity, alignment: .leading)
+            Text("PROVIDER").frame(width: 100, alignment: .leading)
+            Text("SIZE").frame(width: 70, alignment: .leading)
+            Text("SPAWN").frame(width: 40, alignment: .leading)
+            Spacer().frame(width: 100)           // chat + delete buttons
+        }
+        .font(.caption2.weight(.semibold))
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 6)
     }
 
     private var emptyState: some View {
@@ -198,20 +217,29 @@ private struct PetRow: View {
                 applySizeChoice(newVal)
             }
 
-            Toggle(isOn: $spawned) {
-                Text(spawned ? "Spawned" : "Spawn")
-            }
-            .toggleStyle(.switch)
-            .onChange(of: spawned) { newValue in
-                pet.isSpawned = newValue
-                if newValue { controller?.spawn(pet: pet) } else { controller?.despawn(slug: pet.slug) }
-                onChange()
-            }
+            // Spawn switch — column header makes the label redundant.
+            Toggle("", isOn: $spawned)
+                .toggleStyle(.switch)
+                .labelsHidden()
+                .help(spawned ? "Spawned — toggle to remove from screen" : "Spawn this pet")
+                .onChange(of: spawned) { newValue in
+                    pet.isSpawned = newValue
+                    if newValue { controller?.spawn(pet: pet) } else { controller?.despawn(slug: pet.slug) }
+                    onChange()
+                }
 
             Button("Open Chat") {
                 controller?.openChat(slug: pet.slug)
             }
             .disabled(!spawned)
+
+            Button {
+                confirmDeletePet()
+            } label: {
+                Image(systemName: "trash")
+            }
+            .buttonStyle(.borderless)
+            .help("Delete \(pet.slug) and remove its files")
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
@@ -227,6 +255,20 @@ private struct PetRow: View {
                 let pack = pet.loadPack()
                 DispatchQueue.main.async { preview = pack?.previewFrame }
             }
+        }
+    }
+
+    private func confirmDeletePet() {
+        let alert = NSAlert()
+        alert.messageText = "Delete \(pet.slug)?"
+        alert.informativeText = "This removes the pet's files from ~/.codex/pets/ and clears its preferences. You can reinstall it any time with `npx petdex install \(pet.slug)`."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Delete")
+        alert.addButton(withTitle: "Cancel")
+        if alert.runModal() == .alertFirstButtonReturn {
+            controller?.despawn(slug: pet.slug)
+            PetLibrary.uninstall(slug: pet.slug)
+            onChange()
         }
     }
 
