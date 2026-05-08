@@ -325,10 +325,14 @@ class WalkerCharacter {
     }
 
     /// Refresh which zone is highlighted based on the dragged window center.
+    /// Also drags the popover + thinking bubble along with the pet so they
+    /// don't lag behind waiting for the next controller tick.
     func updateDragSession() {
         guard let win = window else { return }
         let center = NSPoint(x: win.frame.midX, y: win.frame.midY)
         DropZoneOverlay.shared.update(petCenter: center)
+        updatePopoverPosition()
+        updateThinkingBubble()
     }
 
     /// Resolve the drop zone, set placement, and hide the overlay.
@@ -1045,12 +1049,16 @@ class WalkerCharacter {
     }
 
     /// Vertical bounce applied while `spriteState == .happy` (8-frame sin curve over ~0.8s).
+    /// Subtle vertical "nod" when the pet enters `.happy` — small enough to
+    /// register as acknowledgment rather than a jump. Amplitude is 3% of the
+    /// pet height (was 8%) and total duration is 0.6 s (was 0.8 s) so it
+    /// settles back before the completion sound finishes.
     func happyHopOffset(now: CFTimeInterval) -> CGFloat {
         guard spriteState == .happy, hopEndTime > now else { return 0 }
-        let total: CFTimeInterval = 0.8
+        let total: CFTimeInterval = 0.6
         let remaining = hopEndTime - now
-        let t = max(0, min(1, 1 - remaining / total))   // 0…1 over the hop
-        let amp: CGFloat = displayHeight * 0.08
+        let t = max(0, min(1, 1 - remaining / total))
+        let amp: CGFloat = displayHeight * 0.03
         return amp * CGFloat(sin(t * .pi))
     }
 
