@@ -103,38 +103,40 @@ class CharacterContentView: NSView {
     override func mouseDragged(with event: NSEvent) {
         guard let start = dragStartLocal, let win = window else { return }
         let cur = event.locationInWindow
-        totalDragDistance += hypot(cur.x - start.x, cur.y - start.y)
+        let dx = cur.x - start.x
+        let dy = cur.y - start.y
+        totalDragDistance += hypot(dx, dy)
 
-        if didDrag { return }                                  // already handed off below
-        if totalDragDistance < Self.dragThreshold { return }
+        // Below threshold → still might be a click; don't move yet.
+        if !didDrag, totalDragDistance < Self.dragThreshold { return }
 
-        didDrag = true
-        character?.isShiftDraggingWindow = true                // "currently dragging"
-        NSCursor.closedHand.set()
+        if !didDrag {
+            // First frame past the threshold: kick off drag mode.
+            didDrag = true
+            character?.isShiftDraggingWindow = true
+            NSCursor.closedHand.set()
+            character?.beginDragSession()
+        }
 
-        // Hand the window off to AppKit's native drag pump. This blocks until
-        // mouseUp and moves the window at native event-loop speed — far snappier
-        // than calling `setFrameOrigin` per event.
-        win.performDrag(with: event)
+        var o = win.frame.origin
+        o.x += dx
+        o.y += dy
+        win.setFrameOrigin(o)
+        dragStartLocal = cur
 
-        // performDrag returned → user released the mouse.
-        character?.isShiftDraggingWindow = false
-        character?.handleDragRelease()
-        applyCursor()
-        dragStartLocal = nil
-        didDrag = false
-        totalDragDistance = 0
+        character?.updateDragSession()
     }
 
     override func mouseUp(with event: NSEvent) {
-        // If we already entered performDrag, this event was consumed there.
-        guard let _ = dragStartLocal else { return }
         let wasDrag = didDrag
         dragStartLocal = nil
         didDrag = false
+        totalDragDistance = 0
         character?.isShiftDraggingWindow = false
 
-        if !wasDrag {
+        if wasDrag {
+            character?.endDragSession()
+        } else {
             character?.handleClick()
         }
         applyCursor()

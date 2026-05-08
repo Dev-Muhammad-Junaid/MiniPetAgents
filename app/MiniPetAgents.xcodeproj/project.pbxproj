@@ -28,6 +28,7 @@
 		A10000010000000000000044 /* PlacementMode.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000020000000000000044 /* PlacementMode.swift */; };
 		A10000010000000000000045 /* BroadcastComposer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000020000000000000045 /* BroadcastComposer.swift */; };
 		A10000010000000000000046 /* BehaviorPlanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000020000000000000046 /* BehaviorPlanner.swift */; };
+		A10000010000000000000047 /* DropZoneOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000020000000000000047 /* DropZoneOverlay.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -53,6 +54,7 @@
 		A10000020000000000000044 /* PlacementMode.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlacementMode.swift; sourceTree = "<group>"; };
 		A10000020000000000000045 /* BroadcastComposer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BroadcastComposer.swift; sourceTree = "<group>"; };
 		A10000020000000000000046 /* BehaviorPlanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BehaviorPlanner.swift; sourceTree = "<group>"; };
+		A10000020000000000000047 /* DropZoneOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DropZoneOverlay.swift; sourceTree = "<group>"; };
 		A10000030000000000000001 /* Mini Pet Agents.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Mini Pet Agents.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -89,6 +91,7 @@
 				A10000020000000000000044 /* PlacementMode.swift */,
 				A10000020000000000000045 /* BroadcastComposer.swift */,
 				A10000020000000000000046 /* BehaviorPlanner.swift */,
+				A10000020000000000000047 /* DropZoneOverlay.swift */,
 				A10000020000000000000020 /* PopoverTheme.swift */,
 				A10000020000000000000021 /* CharacterContentView.swift */,
 				A10000020000000000000030 /* AgentSession.swift */,
@@ -199,6 +202,7 @@
 				A10000010000000000000044 /* PlacementMode.swift in Sources */,
 				A10000010000000000000045 /* BroadcastComposer.swift in Sources */,
 				A10000010000000000000046 /* BehaviorPlanner.swift in Sources */,
+				A10000010000000000000047 /* DropZoneOverlay.swift in Sources */,
 				A10000010000000000000020 /* PopoverTheme.swift in Sources */,
 				A10000010000000000000021 /* CharacterContentView.swift in Sources */,
 				A10000010000000000000031 /* AgentSession.swift in Sources */,

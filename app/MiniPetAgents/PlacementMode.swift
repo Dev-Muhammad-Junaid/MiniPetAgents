@@ -79,21 +79,8 @@ struct FreeRoamPlacement: PlacementStrategy {
             return
         }
 
-        // Hold position only while there's a real activity reason (agent busy / popover open).
-        let pauseTalk = PetLibrary.resolvedPauseWhileTalking(for: pet.petSlug)
-        if pet.isWalking, pet.shouldHoldForActivity,
-           pet.motionHoldStates(pauseWhileTalking: pauseTalk).contains(pet.spriteState) {
-            // Advance walkStartTime so elapsed stays put; pet appears to wait in place.
-            pet.walkStartTime += 1.0 / 60.0
-            let frame = pet.window.frame
-            pet.window.setFrameOrigin(NSPoint(x: frame.origin.x, y: frame.origin.y + pet.happyHopOffset(now: ctx.now)))
-            pet.updateThinkingBubble()
-            return
-        }
-
         if pet.isPaused {
             if ctx.now >= pet.pauseEndTime {
-                // Pick a new roam target before starting a fresh walk.
                 pet.roamTargetX = bounds.minX + CGFloat.random(in: 0...bounds.width)
                 pet.roamTargetY = bounds.minY + CGFloat.random(in: 0...bounds.height)
                 pet.startWalk()
@@ -107,8 +94,19 @@ struct FreeRoamPlacement: PlacementStrategy {
         }
 
         if pet.isWalking {
-            let mult = max(0.1, pet.walkSpeedMultiplier * (pet.spriteState == .run ? 2.0 : 1.0))
-            let elapsed = (ctx.now - pet.walkStartTime) * mult
+            // Free-roam shares the dock walk's scaled-elapsed integrator so
+            // velocity stays continuous when `walkSpeedMultiplier` flips.
+            let pauseTalk = PetLibrary.resolvedPauseWhileTalking(for: pet.petSlug)
+            let wantsHold = pet.shouldHoldForActivity
+                && pet.motionHoldStates(pauseWhileTalking: pauseTalk).contains(pet.spriteState)
+            if wantsHold {
+                let frame = pet.window.frame
+                pet.window.setFrameOrigin(NSPoint(x: frame.origin.x,
+                                                  y: frame.origin.y + pet.happyHopOffset(now: ctx.now)))
+                pet.updateThinkingBubble()
+                return
+            }
+            let elapsed = pet.advanceScaledElapsed(now: ctx.now)
             let videoTime = min(elapsed, pet.videoDuration)
             let walkNorm = elapsed >= pet.videoDuration ? 1.0 : pet.movementPosition(at: videoTime)
 
@@ -120,10 +118,8 @@ struct FreeRoamPlacement: PlacementStrategy {
             let x = startX + (targetX - startX) * walkNorm
             let y = startY + (targetY - startY) * walkNorm + pet.happyHopOffset(now: ctx.now)
 
-            // Keep flip in sync with horizontal direction.
             pet.goingRight = targetX >= startX
             pet.updateFlip()
-            pet.syncWalkSpriteFrames(normalized: walkNorm)
 
             if elapsed >= pet.videoDuration {
                 pet.enterPause()

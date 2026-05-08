@@ -127,6 +127,15 @@ class WalkerCharacter {
     // MARK: - Walk state
 
     var walkStartTime: CFTimeInterval = 0
+    /// Speed-scaled elapsed time for the current walk, integrated per tick as
+    /// `dt * walkSpeedMultiplier`. Decoupling from `(now - walkStartTime)`
+    /// prevents velocity jumps when the multiplier changes mid-walk.
+    var walkScaledElapsed: CFTimeInterval = 0
+    private var walkLastTickTime: CFTimeInterval = 0
+    /// Debounce: timestamp at which `shouldHoldForActivity` first became true.
+    /// Single-tick session-state churn won't freeze movement.
+    private var holdRequestStart: CFTimeInterval?
+    private static let holdDebounceWindow: CFTimeInterval = 0.2
     var positionProgress: CGFloat = 0.0
     var isWalking = false
     var isPaused = true
@@ -293,6 +302,43 @@ class WalkerCharacter {
         updatePopoverPosition()
     }
 
+    // MARK: - Drag session (drag-to-zone UX)
+
+    /// Show the drop-zone overlay and (optionally) freeze auto-placement.
+    func beginDragSession() {
+        guard let ctrl = controller, let screen = ctrl.activeScreen else { return }
+        DropZoneOverlay.shared.show(on: screen,
+                                    dockX: ctrl.lastDockX,
+                                    dockWidth: ctrl.lastDockWidth,
+                                    dockTopY: screen.visibleFrame.minY)
+    }
+
+    /// Refresh which zone is highlighted based on the dragged window center.
+    func updateDragSession() {
+        guard let win = window else { return }
+        let center = NSPoint(x: win.frame.midX, y: win.frame.midY)
+        DropZoneOverlay.shared.update(petCenter: center)
+    }
+
+    /// Resolve the drop zone, set placement, and hide the overlay.
+    func endDragSession() {
+        guard let win = window else { return }
+        let center = NSPoint(x: win.frame.midX, y: win.frame.midY)
+        let resolved = DropZoneOverlay.shared.zoneAt(center)
+        DropZoneOverlay.shared.hide()
+
+        if resolved != placement, let pet = PetLibrary.shared.pet(slug: petSlug) {
+            pet.placement = resolved          // persists via UserDefaults
+            placement = resolved
+            // FreeRoam needs a fresh roam target; dock will recompute progress.
+            roamTargetX = nil
+            roamTargetY = nil
+            // Refresh the menubar so the per-pet placement check mark moves.
+            (NSApp.delegate as? AppDelegate)?.rebuildMenuBar()
+        }
+        handleDragRelease()
+    }
+
     /// Called after a free-drag finishes. The pet stays where dropped for a
     /// short cooldown, then placement strategies resume normal motion.
     /// For dock placement we recompute `positionProgress` from the new x so
@@ -322,13 +368,26 @@ class WalkerCharacter {
     }
 
     /// Keeps walk sprite frames aligned with movement along the dock (0…1).
-    /// Only fires when the sprite is actually in `.walk` or `.run` — otherwise
-    /// the frame index would override whatever animation a session callback
-    /// (e.g. `.talking`) is currently playing.
-    func syncWalkSpriteFrames(normalized: CGFloat) {
-        guard isWalking, spriteState == .walk || spriteState == .run else { return }
-        animator?.syncWalkProgress(normalized)
+    /// No-op: walk frames now cycle at the sprite's natural FPS (set by the
+    /// pet's `pet.json`) instead of being pegged to position. Position-locked
+    /// frames produced visible stutter on packs with few walk frames; native-
+    /// rate playback matches what LilAgents got from HEVC video.
+    func syncWalkSpriteFrames(normalized: CGFloat) { /* intentionally empty */ }
+
+    /// Integrate `dt * walkSpeedMultiplier` (with a 2× boost while `.run`)
+    /// into `walkScaledElapsed` and return the new total. Used by the dock
+    /// and free-roam tick paths so changing speed mid-walk doesn't jump.
+    func advanceScaledElapsed(now: CFTimeInterval) -> CFTimeInterval {
+        let mult = max(0.1, walkSpeedMultiplier * (spriteState == .run ? 2.0 : 1.0))
+        let dt = max(0, now - walkLastTickTime)
+        walkLastTickTime = now
+        walkScaledElapsed += dt * mult
+        return walkScaledElapsed
     }
+
+    /// While held, do not let dt accumulate — the next `advanceScaledElapsed`
+    /// call should treat held-time as zero.
+    func freezeWalkClock(at now: CFTimeInterval) { walkLastTickTime = now }
 
     // MARK: - Click Handling & Popover
 
@@ -808,7 +867,11 @@ class WalkerCharacter {
     func startWalk() {
         isPaused = false
         isWalking = true
-        walkStartTime = CACurrentMediaTime()
+        let now = CACurrentMediaTime()
+        walkStartTime = now
+        walkScaledElapsed = 0
+        walkLastTickTime = now
+        holdRequestStart = nil
         // Don't override session-driven states (.talking/.think/.working/etc) or
         // a planner-picked `.run` burst. Anything else (idle, happy, sad, sleep)
         // becomes `.walk` for this leg.
@@ -1008,12 +1071,22 @@ class WalkerCharacter {
         }
 
         if isWalking {
-            // Hold motion only when there's a real reason to (agent busy / popover open)
-            // AND the sprite state asks for a hold. Otherwise stale `.sad`/`.think` after
-            // a long-finished session would freeze the pet permanently.
+            // Debounced hold gate: we only freeze motion when the agent has
+            // been busy / popover open for ≥ 200 ms AND the sprite is in a
+            // hold state. Single-tick churn from session callbacks no longer
+            // stutters the walk.
             let pauseWhileTalking = PetLibrary.resolvedPauseWhileTalking(for: petSlug)
-            if shouldHoldForActivity, motionHoldStates(pauseWhileTalking: pauseWhileTalking).contains(spriteState) {
-                walkStartTime += 1.0 / 60.0
+            let wantsHold = shouldHoldForActivity
+                && motionHoldStates(pauseWhileTalking: pauseWhileTalking).contains(spriteState)
+            if wantsHold {
+                if holdRequestStart == nil { holdRequestStart = now }
+            } else {
+                holdRequestStart = nil
+            }
+            let isHolding = holdRequestStart.map { now - $0 >= Self.holdDebounceWindow } ?? false
+
+            if isHolding {
+                freezeWalkClock(at: now)
                 let travelDistance = currentTravelDistance
                 let x = dockX + travelDistance * positionProgress + currentFlipCompensation
                 let bottomPadding = displayHeight * 0.15
@@ -1023,8 +1096,7 @@ class WalkerCharacter {
                 return
             }
 
-            let mult = max(0.1, walkSpeedMultiplier * (spriteState == .run ? 2.0 : 1.0))
-            let elapsed = (now - walkStartTime) * mult
+            let elapsed = advanceScaledElapsed(now: now)
             let videoTime = min(elapsed, videoDuration)
             let travelDistance = currentTravelDistance
 
@@ -1034,8 +1106,6 @@ class WalkerCharacter {
             if travelDistance > 0 {
                 positionProgress = min(max(currentPixel / travelDistance, 0), 1)
             }
-
-            syncWalkSpriteFrames(normalized: walkNorm)
 
             if elapsed >= videoDuration {
                 walkEndPos = positionProgress
