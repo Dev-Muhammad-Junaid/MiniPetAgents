@@ -287,7 +287,7 @@ final class PetAgentsController {
         for char in activeChars { char.applySpriteTransform(now: now) }
 
         // Greet on collision: any two dock-walking pets within 0.06 of each
-        // other in positionProgress trigger a brief .happy + reverse for
+        // other in positionProgress trigger a brief .jumping + reverse for
         // both, with a 4 s cooldown to avoid retriggering during the same
         // close-pass.
         runGreetOnCollision(activeChars: activeChars, now: now)
@@ -299,7 +299,7 @@ final class PetAgentsController {
     }
 
     /// When two dock-walking pets get close on the dock, both do a brief
-    /// `.happy` greet + reverse direction. Cooldown prevents retriggers
+    /// `.jumping` greet + reverse direction. Cooldown prevents retriggers
     /// during a single near-pass.
     private func runGreetOnCollision(activeChars: [WalkerCharacter], now: CFTimeInterval) {
         let dockPets = activeChars.filter { $0.placement == .dock && $0.isWalking }
@@ -318,8 +318,8 @@ final class PetAgentsController {
 
                 a.lastGreetTime = now
                 b.lastGreetTime = now
-                a.setSpriteState(.happy, source: .planner)
-                b.setSpriteState(.happy, source: .planner)
+                a.setSpriteState(.jumping, source: .planner)
+                b.setSpriteState(.jumping, source: .planner)
                 // Reverse direction so they part ways gracefully.
                 a.goingRight.toggle()
                 b.goingRight.toggle()

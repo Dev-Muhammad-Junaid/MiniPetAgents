@@ -200,7 +200,7 @@ class WalkerCharacter {
     /// CACurrentMediaTime() of the last session-callback-induced state change.
     /// `BehaviorPlanner` waits a quiet window after this before picking new states.
     private(set) var lastSessionEventTime: CFTimeInterval = 0
-    /// CACurrentMediaTime() at which the current `.happy` hop should end (0 = no hop).
+    /// CACurrentMediaTime() at which the current `.jumping` hop should end (0 = no hop).
     var hopEndTime: CFTimeInterval = 0
     /// Where the hop started, in window-frame coordinates. Used to interpolate the sin-curve y offset.
     var hopBaseY: CGFloat = 0
@@ -223,7 +223,7 @@ class WalkerCharacter {
     /// Mutate `spriteState`. Records the last session-event time so the planner backs off.
     func setSpriteState(_ state: PetState, source: SpriteStateSource) {
         if source == .session { lastSessionEventTime = CACurrentMediaTime() }
-        if state == .happy {
+        if state == .jumping {
             hopEndTime = CACurrentMediaTime() + 0.8
             hopBaseY = window?.frame.origin.y ?? 0
         }
@@ -234,7 +234,18 @@ class WalkerCharacter {
     /// keeps animating. Caller must guard with `shouldHoldForActivity`
     /// (popover open or agent busy) so a stale session-driven state can't
     /// freeze the pet forever.
-    var motionHoldStates: Set<PetState> { [.sleep, .think, .working, .talking] }
+    var motionHoldStates: Set<PetState> { [.waiting, .review, .waving] }
+
+    /// Sprite for the current walking direction. Petdex packs ship separate
+    /// rows for left and right runs — we pick the right row instead of
+    /// flipping the sprite layer.
+    var directionalRunState: PetState { goingRight ? .runRight : .runLeft }
+
+    /// True for any "the pet is moving" state — used by tick code that
+    /// previously checked `.walk` only.
+    func isWalkLikeState(_ s: PetState) -> Bool {
+        s == .runRight || s == .runLeft || s == .running
+    }
 
     /// True if the pet has reason to hold position right now: the agent is
     /// busy, the popover is open, or the pet just woke up sad/asleep.
@@ -384,7 +395,7 @@ class WalkerCharacter {
         isWalking = false
         isPaused = true
         pauseEndTime = CACurrentMediaTime() + 1.5
-        if spriteState != .talking, spriteState != .think {
+        if spriteState != .waving, spriteState != .waiting {
             setSpriteState(.idle, source: .ui)
         }
         updatePopoverPosition()
@@ -398,11 +409,11 @@ class WalkerCharacter {
     /// rate playback matches what LilAgents got from HEVC video.
     func syncWalkSpriteFrames(normalized: CGFloat) { /* intentionally empty */ }
 
-    /// Integrate `dt * walkSpeedMultiplier` (with a 2× boost while `.run`)
+    /// Integrate `dt * walkSpeedMultiplier` (with a 2× boost while `.running`)
     /// into `walkScaledElapsed` and return the new total. Used by the dock
     /// and free-roam tick paths so changing speed mid-walk doesn't jump.
     func advanceScaledElapsed(now: CFTimeInterval) -> CFTimeInterval {
-        let mult = max(0.1, walkSpeedMultiplier * (spriteState == .run ? 2.0 : 1.0))
+        let mult = max(0.1, walkSpeedMultiplier * (spriteState == .running ? 2.0 : 1.0))
         let dt = max(0, now - walkLastTickTime)
         walkLastTickTime = now
         walkScaledElapsed += dt * mult
@@ -481,7 +492,7 @@ class WalkerCharacter {
         isIdleForPopover = true
         isWalking = false
         isPaused = true
-        setSpriteState(.talking, source: .ui)
+        setSpriteState(.waving, source: .ui)
 
         showingCompletion = false
         hideBubble()
@@ -652,26 +663,26 @@ class WalkerCharacter {
         session.onText = { [weak self] text in
             self?.currentStreamingText += text
             self?.terminalView?.appendStreamingText(text)
-            self?.setSpriteState(.talking, source: .session)
+            self?.setSpriteState(.waving, source: .session)
         }
         session.onTurnComplete = { [weak self] in
             self?.terminalView?.endStreaming()
             self?.playCompletionSound()
             self?.showCompletionBubble()
-            self?.setSpriteState(.happy, source: .session)
+            self?.setSpriteState(.jumping, source: .session)
             // Notify placement strategies (e.g. notch/edgeSlide) so they can
             // briefly reveal the pet on completion.
             self?.controller?.notifyTurnComplete(self)
         }
         session.onError = { [weak self] text in
             self?.terminalView?.appendError(text)
-            self?.setSpriteState(.sad, source: .session)
+            self?.setSpriteState(.failed, source: .session)
         }
         session.onToolUse = { [weak self] toolName, input in
             guard let self = self else { return }
             let summary = self.formatToolInput(input)
             self.terminalView?.appendToolUse(toolName: toolName, summary: summary)
-            self.setSpriteState(.working, source: .session)
+            self.setSpriteState(.review, source: .session)
         }
         session.onToolResult = { [weak self] summary, isError in
             self?.terminalView?.appendToolResult(summary: summary, isError: isError)
@@ -750,7 +761,7 @@ class WalkerCharacter {
         }
 
         if isAgentBusy && !isIdleForPopover {
-            setSpriteState(.think, source: .session)
+            setSpriteState(.waiting, source: .session)
             let oldPhrase = currentPhrase
             updateThinkingPhrase()
             if currentPhrase != oldPhrase {
@@ -899,12 +910,12 @@ class WalkerCharacter {
         walkScaledElapsed = 0
         walkLastTickTime = now
         holdRequestStart = nil
-        // Don't override session-driven states (.talking/.think/.working/etc) or
-        // a planner-picked `.run` burst. Anything else (idle, happy, sad, sleep)
-        // becomes `.walk` for this leg.
-        let preserve: Set<PetState> = [.talking, .think, .working, .run]
+        // Don't override session-driven states (.waving/.waiting/.review/etc)
+        // or a planner-picked `.running` burst. Anything else becomes a
+        // directional run sprite (`.runRight` or `.runLeft`) for this leg.
+        let preserve: Set<PetState> = [.waving, .waiting, .review, .running]
         if !preserve.contains(spriteState) {
-            setSpriteState(.walk, source: .planner)
+            setSpriteState(directionalRunState, source: .planner)
         }
 
         walkStartPos = positionProgress
@@ -1004,16 +1015,14 @@ class WalkerCharacter {
         // for the return trip (handled on the next startWalk via the planner).
         let atDockEdge = placement == .dock && (positionProgress >= 0.96 || positionProgress <= 0.04)
 
-        if spriteState == .walk || spriteState == .run {
-            if atDockEdge {
-                // Edge bump: squash + stretch transform regardless of mood.
-                triggerEdgeBump()
-                if Double.random(in: 0...1) < 0.7 {
-                    // Happy hop at the bounce point.
-                    setSpriteState(.happy, source: .planner)
-                    pauseEndTime = now + Double.random(in: 1.0...1.6)
-                    return
-                }
+        if isWalkLikeState(spriteState) {
+            // At a dock edge there's a 70% chance the pet plays its `.jumping`
+            // sprite before turning around — a native-frame "bounce", no
+            // synthetic squash transform.
+            if atDockEdge, Double.random(in: 0...1) < 0.7 {
+                setSpriteState(.jumping, source: .planner)
+                pauseEndTime = now + Double.random(in: 1.0...1.6)
+                return
             }
             setSpriteState(.idle, source: .planner)
         }
@@ -1025,48 +1034,33 @@ class WalkerCharacter {
         pauseEndTime = now + delay
     }
 
-    /// Compose the sprite-layer transform from three layers:
-    /// 1. Direction flip (mirror if `!goingRight`)
-    /// 2. Hover wave (small rotation sin curve while `isHovering`)
-    /// 3. Edge-bump squash (horizontal compress + vertical stretch, decays
-    ///    over `bumpDuration` from `bumpEndTime`)
-    /// Wrapped in `CATransaction.setDisableActions(true)` so changes never fade.
+    /// Pets ship separate `.runRight` / `.runLeft` rows in their petdex
+    /// spritesheet, so direction-of-travel is handled by sprite-state
+    /// selection — there is no transform mirror, rotation, squash, wiggle,
+    /// or any other synthetic layer. The sprite layer stays at identity.
+    /// This method is a no-op kept for source compatibility with existing
+    /// call sites.
     func applySpriteTransform(now: CFTimeInterval = CACurrentMediaTime()) {
-        var t = CATransform3DIdentity
-        if !goingRight { t = CATransform3DScale(t, -1, 1, 1) }
-
-        // Rotation wave only fires during the WAVE phase of the hover cycle —
-        // during JUMP the `.happy` sprite frames carry the motion, and during
-        // IDLE the pet rests. Outside hover, no rotation.
-        if isHovering, hoverPhase(at: now) == .wave {
-            // ~7° wave at ~5 Hz — playful but not seizure-inducing.
-            let phaseT = (now - hoverStartTime) * 5.0
-            let angle = sin(phaseT * 2 * .pi) * (7.0 * .pi / 180.0)
-            t = CATransform3DRotate(t, CGFloat(angle), 0, 0, 1)
-        }
-
-        if bumpEndTime > now {
-            let remaining = bumpEndTime - now
-            let s = CGFloat(remaining / Self.bumpDuration)            // 1→0
-            let amp: CGFloat = 0.18 * s                               // peak 18%
-            t = CATransform3DScale(t, 1 + amp, 1 - amp, 1)            // wide+short
-        }
-
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        spriteLayer.transform = t
-        spriteLayer.frame = CGRect(x: 0, y: 0, width: displayWidth, height: displayHeight)
-        CATransaction.commit()
+        // Intentionally empty.
     }
 
-    /// Existing call sites still work — direction-only flip is now a thin
-    /// wrapper that goes through the unified transform pipeline.
-    func updateFlip() { applySpriteTransform() }
+    /// When walking, ensure the sprite state matches the current direction.
+    /// Replaces the old `updateFlip` (which did a CATransform3D mirror).
+    func updateFlip() {
+        guard isWalking, isWalkLikeState(spriteState) else { return }
+        // Only swap between runRight / runLeft — leave .running alone since
+        // packs only ship a single running row.
+        if spriteState == .runRight, !goingRight {
+            setSpriteState(.runLeft, source: .planner)
+        } else if spriteState == .runLeft, goingRight {
+            setSpriteState(.runRight, source: .planner)
+        }
+    }
 
     // MARK: - Hover wave (sprite-state cycle, no Y movement)
 
     /// Three-phase hover cycle: WAVE (rotation wiggle on the idle sprite) →
-    /// JUMP (`.happy` sprite frames, no rotation) → IDLE (rest), repeat.
+    /// JUMP (`.jumping` sprite frames, no rotation) → IDLE (rest), repeat.
     /// All phases hold the pet's window position constant — there is no
     /// Y translation in any phase.
     enum HoverPhase { case wave, jump, idle }
@@ -1095,12 +1089,12 @@ class WalkerCharacter {
         guard isHovering else { return }
         isHovering = false
         // Drop back to idle so the next planner tick can resume normal mood.
-        if spriteState == .happy { setSpriteState(.idle, source: .ui) }
+        if spriteState == .jumping { setSpriteState(.idle, source: .ui) }
         applySpriteTransform()
     }
 
     /// Called from the controller's per-tick loop. Cycles the sprite state
-    /// between `.happy` and `.idle` while hovering. Freezes the walk clock
+    /// between `.jumping` and `.idle` while hovering. Freezes the walk clock
     /// so the pet doesn't drift across the dock while waving.
     func tickHover(now: CFTimeInterval) {
         // Defensive: chat opened while hovering — bail and revert.
@@ -1111,7 +1105,7 @@ class WalkerCharacter {
         guard isHovering else { return }
 
         let phase = hoverPhase(at: now)
-        let target: PetState = phase == .jump ? .happy : .idle
+        let target: PetState = phase == .jump ? .jumping : .idle
         if spriteState != target {
             setSpriteState(target, source: .ui)
         }
@@ -1120,7 +1114,7 @@ class WalkerCharacter {
     }
 
     /// Returns 0 unconditionally. Hover no longer translates the window —
-    /// hover reads through a sprite-state loop (`.happy` ↔ `.idle`) plus
+    /// hover reads through a sprite-state loop (`.jumping` ↔ `.idle`) plus
     /// the rotation wave layered onto the sprite transform.
     func hoverBounceOffset(now: CFTimeInterval) -> CGFloat { 0 }
 
@@ -1153,9 +1147,9 @@ class WalkerCharacter {
         } else { return 1.0 }
     }
 
-    /// Vertical bounce applied while `spriteState == .happy` (8-frame sin curve over ~0.8s).
+    /// Vertical bounce applied while `spriteState == .jumping` (8-frame sin curve over ~0.8s).
     /// Returns 0 unconditionally — pets no longer move on the Y axis when
-    /// entering `.happy`. The "jump" reads through the sprite frames, not
+    /// entering `.jumping`. The "jump" reads through the sprite frames, not
     /// through window translation. Kept as a function so existing call
     /// sites compile without churn.
     func happyHopOffset(now: CFTimeInterval) -> CGFloat { 0 }
@@ -1208,7 +1202,7 @@ class WalkerCharacter {
                 let travelDistance = currentTravelDistance
                 let x = dockX + travelDistance * positionProgress + currentFlipCompensation
                 let bottomPadding = displayHeight * 0.15
-                let y = dockTopY - bottomPadding + yOffset + happyHopOffset(now: now) + hoverBounceOffset(now: now)
+                let y = dockTopY - bottomPadding + yOffset
                 window.setFrameOrigin(NSPoint(x: x, y: y))
                 updateThinkingBubble()
                 return
@@ -1233,7 +1227,7 @@ class WalkerCharacter {
 
             let x = dockX + travelDistance * positionProgress + currentFlipCompensation
             let bottomPadding = displayHeight * 0.15
-            let y = dockTopY - bottomPadding + yOffset + happyHopOffset(now: now) + hoverBounceOffset(now: now)
+            let y = dockTopY - bottomPadding + yOffset
             window.setFrameOrigin(NSPoint(x: x, y: y))
         }
 

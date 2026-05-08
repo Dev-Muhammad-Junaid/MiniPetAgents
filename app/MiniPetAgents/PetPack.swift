@@ -1,11 +1,43 @@
 import AppKit
 import ImageIO
 
-/// High-level animation states the app maps every pet to. Petdex packs ship
-/// 9 named states; we translate whatever the pack provides into this enum
-/// and fall back to `.idle` when a state is missing.
+/// Sprite-sheet states as shipped by every petdex pack (rows 0–8 in order).
+/// We only use what the spritesheet actually provides — no synthetic
+/// rotations, mirroring or extra transforms. Direction-of-travel is handled
+/// by swapping between `.runRight` and `.runLeft` rows, not by flipping.
 enum PetState: String, CaseIterable {
-    case idle, walk, run, sleep, think, happy, sad, working, talking
+    case idle       // row 0 — 6 frames, default rest pose
+    case runRight   // row 1 — 8 frames, walking right
+    case runLeft    // row 2 — 8 frames, walking left
+    case waving     // row 3 — 4 frames, "hi" wave
+    case jumping    // row 4 — 5 frames, jump pose
+    case failed     // row 5 — 8 frames, error / sad reaction
+    case waiting    // row 6 — 6 frames, thinking / agent busy
+    case running    // row 7 — 6 frames, faster sprint
+    case review     // row 8 — 6 frames, examining / tool use
+
+    /// Accept a few legacy / alternate spellings from older pet.json files
+    /// or pre-refactor code paths. Anything unknown falls back to `.idle`
+    /// at the call site.
+    static func resolve(_ raw: String) -> PetState? {
+        let key = raw.lowercased()
+        if let direct = PetState(rawValue: key) { return direct }
+        switch key {
+        case "walk", "walking":             return .runRight
+        case "run":                         return .running
+        case "sleep", "sleeping":           return .idle
+        case "think", "thinking":           return .waiting
+        case "talking", "talk", "talker":   return .waving
+        case "happy", "celebrate", "hop":   return .jumping
+        case "sad", "error":                return .failed
+        case "working", "tool", "tooluse":  return .review
+        case "wave":                        return .waving
+        case "jump":                        return .jumping
+        case "run-right", "run_right":      return .runRight
+        case "run-left", "run_left":        return .runLeft
+        default: return nil
+        }
+    }
 }
 
 /// On-disk pet pack as installed by `npx petdex install <slug>` into
@@ -182,7 +214,7 @@ struct PetMetadata {
 
         var animations: [PetState: PetAnimation] = [:]
         for (key, value) in animsRaw {
-            guard let state = PetState(rawValue: key.lowercased()) else { continue }
+            guard let state = PetState.resolve(key) else { continue }
             if let anim = PetAnimation.decode(value: value, defaultRow: animations.count, cols: cols) {
                 animations[state] = anim
             }
@@ -250,14 +282,9 @@ final class SpriteAnimator {
     /// When false, we hold a single frame (no rapid cycling — avoids idle "blinks").
     private var advanceFramesWithTimer = true
 
-    /// States that hold a single frame instead of cycling.
-    /// `.think` / `.working` stay static so the eye-blink cycle does not
-    /// distract while the agent is busy; `.idle` / `.sleep` animate gently
-    /// so the pet feels alive between walks.
-    private static let staticHoldStates: Set<PetState> = [.think, .working]
-    /// States that loop frames slowly (idle blinks, sleep breathing) — capped
-    /// regardless of what the metadata FPS says.
-    private static let slowLoopStates: Set<PetState> = [.idle, .sleep]
+    /// `.idle` ticks slowly; everything else uses the FPS declared in pet.json.
+    /// Nothing is held statically anymore — we use the provided sprite frames.
+    private static let slowLoopStates: Set<PetState> = [.idle]
     private static let slowLoopFps: Double = 3
 
     init(pack: PetPack, layer: CALayer) {
@@ -281,28 +308,11 @@ final class SpriteAnimator {
         frameIndex = 0
         lastFrameTime = CACurrentMediaTime()
 
-        if Self.staticHoldStates.contains(state) {
-            advanceFramesWithTimer = false
-            applyCurrentFrame()
-            return
-        }
         if Self.slowLoopStates.contains(state) {
             currentFps = min(currentFps, Self.slowLoopFps)
         }
         advanceFramesWithTimer = true
         applyCurrentFrame()
-    }
-
-    /// Keeps the walk cycle aligned with how far the pet has moved along its path (0…1).
-    func syncWalkProgress(_ normalized: CGFloat) {
-        guard currentState == .walk, !currentFrames.isEmpty else { return }
-        let t = min(1, max(0, normalized))
-        let maxIdx = max(0, currentFrames.count - 1)
-        let idx = min(maxIdx, Int(round(t * CGFloat(maxIdx))))
-        if idx != frameIndex {
-            frameIndex = idx
-            applyCurrentFrame()
-        }
     }
 
     private func applyCurrentFrame() {

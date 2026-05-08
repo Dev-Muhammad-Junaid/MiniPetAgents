@@ -80,7 +80,7 @@ struct FreeRoamPlacement: PlacementStrategy {
             } else {
                 let charFrame = pet.window.frame
                 pet.window.setFrameOrigin(NSPoint(x: charFrame.origin.x,
-                                                  y: charFrame.origin.y + pet.happyHopOffset(now: ctx.now) + pet.hoverBounceOffset(now: ctx.now)))
+                                                  y: charFrame.origin.y))
                 return
             }
         }
@@ -93,7 +93,7 @@ struct FreeRoamPlacement: PlacementStrategy {
             if wantsHold {
                 let frame = pet.window.frame
                 pet.window.setFrameOrigin(NSPoint(x: frame.origin.x,
-                                                  y: frame.origin.y + pet.happyHopOffset(now: ctx.now) + pet.hoverBounceOffset(now: ctx.now)))
+                                                  y: frame.origin.y))
                 pet.updateThinkingBubble()
                 return
             }
@@ -107,7 +107,7 @@ struct FreeRoamPlacement: PlacementStrategy {
             let targetY = pet.roamTargetY ?? startY
 
             let x = startX + (targetX - startX) * walkNorm
-            let y = startY + (targetY - startY) * walkNorm + pet.happyHopOffset(now: ctx.now) + pet.hoverBounceOffset(now: ctx.now)
+            let y = startY + (targetY - startY) * walkNorm
 
             pet.goingRight = targetX >= startX
             pet.updateFlip()
