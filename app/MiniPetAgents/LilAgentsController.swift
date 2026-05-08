@@ -269,6 +269,11 @@ final class PetAgentsController {
                 char.updatePopoverPosition()
                 continue
             }
+            // Ballistic throw: physics owns the window until the pet settles.
+            if char.isBallistic {
+                char.tickBallistic(now: now, context: context)
+                continue
+            }
             // Hover takes over: freeze motion, cycle sprite state. Skip the
             // placement strategy so the pet doesn't slide while waving.
             if char.isHovering {

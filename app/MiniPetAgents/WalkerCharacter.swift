@@ -173,6 +173,29 @@ class WalkerCharacter {
     /// back to a computed origin instantly.
     var dragCooldownUntil: CFTimeInterval = 0
 
+    // MARK: - Throw / ballistic physics
+    //
+    // When the user releases a drag with enough cursor velocity, the pet
+    // enters a ballistic state and flies under gravity until it settles.
+    // While `isBallistic == true`, placement strategies are skipped and
+    // `tickBallistic(now:)` integrates motion + edge bounces.
+
+    /// Rolling cursor-position samples (screen coords) captured during drag,
+    /// used to estimate release velocity on mouseUp.
+    private var dragSamples: [(t: CFTimeInterval, p: NSPoint)] = []
+    /// True while the pet is flying after a throw.
+    var isBallistic: Bool = false
+    private var ballisticVx: CGFloat = 0
+    private var ballisticVy: CGFloat = 0
+    private var ballisticLastTick: CFTimeInterval = 0
+    /// Tunables — chosen for "feels good on a 16-inch laptop screen".
+    private static let throwSpeedThreshold: CGFloat = 350      // pt/s release speed needed to trigger throw
+    private static let ballisticGravity: CGFloat = 1800        // pt/s² downward
+    private static let ballisticAirDrag: CGFloat = 0.6         // per-second exponential decay of velocity
+    private static let ballisticRestitution: CGFloat = 0.55    // bounce energy retention
+    private static let ballisticFloorRestitution: CGFloat = 0.45
+    private static let ballisticSettleSpeed: CGFloat = 80      // |v| below this on the floor → land
+
     // MARK: - Onboarding
 
     var isOnboarding = false
@@ -350,6 +373,12 @@ class WalkerCharacter {
                                     dockX: ctrl.lastDockX,
                                     dockWidth: ctrl.lastDockWidth,
                                     dockTopY: screen.visibleFrame.minY)
+        dragSamples.removeAll(keepingCapacity: true)
+        dragSamples.append((CACurrentMediaTime(), NSEvent.mouseLocation))
+        // Cancel any in-flight ballistic from a previous throw.
+        isBallistic = false
+        // Pause the autonomous mood loop while held.
+        lastSessionEventTime = CACurrentMediaTime()
     }
 
     /// Refresh which zone is highlighted based on the dragged window center.
@@ -361,15 +390,36 @@ class WalkerCharacter {
         DropZoneOverlay.shared.update(petCenter: center)
         updatePopoverPosition()
         updateThinkingBubble()
+
+        // Ring-buffer the cursor samples — keep only the last ~120ms so the
+        // velocity estimate reflects the *release* motion, not the full drag.
+        let now = CACurrentMediaTime()
+        dragSamples.append((now, NSEvent.mouseLocation))
+        let cutoff = now - 0.12
+        while dragSamples.count > 2, let first = dragSamples.first, first.t < cutoff {
+            dragSamples.removeFirst()
+        }
     }
 
-    /// Resolve the drop zone, set placement, and hide the overlay.
+    /// Resolve the drop zone, set placement, and hide the overlay. If the
+    /// release velocity is high enough, kick off a ballistic throw instead
+    /// of settling at the cursor's drop position.
     func endDragSession() {
         guard let win = window else { return }
-        let center = NSPoint(x: win.frame.midX, y: win.frame.midY)
-        let resolved = DropZoneOverlay.shared.zoneAt(center)
+        let (vx, vy) = estimateReleaseVelocity()
+        let speed = hypot(vx, vy)
+
         DropZoneOverlay.shared.hide()
 
+        if speed >= Self.throwSpeedThreshold {
+            // THROW: skip the zone resolve until the pet lands.
+            startBallistic(vx: vx, vy: vy)
+            return
+        }
+
+        // Slow drop — treat as a deliberate placement.
+        let center = NSPoint(x: win.frame.midX, y: win.frame.midY)
+        let resolved = DropZoneOverlay.shared.zoneAt(center)
         if resolved != placement, let pet = PetLibrary.shared.pet(slug: petSlug) {
             pet.placement = resolved          // persists via UserDefaults
             placement = resolved
@@ -377,6 +427,109 @@ class WalkerCharacter {
             roamTargetX = nil
             roamTargetY = nil
             // Refresh the menubar so the per-pet placement check mark moves.
+            (NSApp.delegate as? AppDelegate)?.rebuildMenuBar()
+        }
+        handleDragRelease()
+    }
+
+    /// Compute release velocity (pt/s) from the trailing cursor samples.
+    /// Uses the oldest-vs-newest sample over the captured window — averages
+    /// out single-frame jitter without smearing into stale early samples.
+    private func estimateReleaseVelocity() -> (CGFloat, CGFloat) {
+        guard let first = dragSamples.first, let last = dragSamples.last,
+              last.t > first.t else { return (0, 0) }
+        let dt = CGFloat(last.t - first.t)
+        return ((last.p.x - first.p.x) / dt,
+                (last.p.y - first.p.y) / dt)
+    }
+
+    private func startBallistic(vx: CGFloat, vy: CGFloat) {
+        isBallistic = true
+        ballisticVx = vx
+        ballisticVy = vy
+        ballisticLastTick = CACurrentMediaTime()
+        // Cancel walk/pause state so the placement strategy doesn't fight us.
+        isWalking = false
+        isPaused = false
+        // Native flailing-mid-air sprite. (We don't synthesize a rotation —
+        // sprite-only per the user's earlier "no synthetic transforms" rule.)
+        setSpriteState(.jumping, source: .ui)
+    }
+
+    /// Per-tick ballistic integration. Bounces off the visible-frame edges
+    /// and the dock-top "floor"; settles when slow enough to be parked.
+    func tickBallistic(now: CFTimeInterval, context ctx: PlacementContext) {
+        guard isBallistic, let win = window else { return }
+
+        let dt = max(0.0, min(0.05, CGFloat(now - ballisticLastTick)))   // clamp for stability
+        ballisticLastTick = now
+
+        // Gravity + exponential air drag.
+        ballisticVy -= Self.ballisticGravity * dt
+        let dragMul = pow(1.0 - Self.ballisticAirDrag, dt)
+        ballisticVx *= dragMul
+        ballisticVy *= dragMul
+
+        var origin = win.frame.origin
+        origin.x += ballisticVx * dt
+        origin.y += ballisticVy * dt
+
+        let bounds = ctx.screen.visibleFrame
+        let minX = bounds.minX
+        let maxX = bounds.maxX - displayWidth
+        let minY: CGFloat = ctx.hasDock ? ctx.dockTopY : bounds.minY
+        let maxY = bounds.maxY - displayWidth   // sprite is square
+
+        // Walls.
+        if origin.x < minX {
+            origin.x = minX
+            ballisticVx = -ballisticVx * Self.ballisticRestitution
+            goingRight = ballisticVx >= 0
+        } else if origin.x > maxX {
+            origin.x = maxX
+            ballisticVx = -ballisticVx * Self.ballisticRestitution
+            goingRight = ballisticVx >= 0
+        }
+        // Ceiling.
+        if origin.y > maxY {
+            origin.y = maxY
+            ballisticVy = -ballisticVy * Self.ballisticRestitution
+        }
+        // Floor — and check for settle.
+        if origin.y < minY {
+            origin.y = minY
+            ballisticVy = -ballisticVy * Self.ballisticFloorRestitution
+            ballisticVx *= 0.85   // friction with the floor
+            // Settle if we don't have enough oomph to leave the floor again.
+            if abs(ballisticVy) < 60, hypot(ballisticVx, ballisticVy) < Self.ballisticSettleSpeed {
+                origin.y = minY
+                ballisticVx = 0
+                ballisticVy = 0
+                win.setFrameOrigin(origin)
+                finishBallistic()
+                return
+            }
+        }
+
+        win.setFrameOrigin(origin)
+        updateFlip()
+        updatePopoverPosition()
+        updateThinkingBubble()
+    }
+
+    private func finishBallistic() {
+        isBallistic = false
+        // Resolve the drop zone from the LANDED position (not where the user
+        // released the cursor) — that's what feels right when you throw a pet
+        // and it skids onto the dock or lands in free-roam space.
+        guard let win = window else { return }
+        let center = NSPoint(x: win.frame.midX, y: win.frame.midY)
+        let resolved = DropZoneOverlay.shared.zoneAt(center)
+        if resolved != placement, let pet = PetLibrary.shared.pet(slug: petSlug) {
+            pet.placement = resolved
+            placement = resolved
+            roamTargetX = nil
+            roamTargetY = nil
             (NSApp.delegate as? AppDelegate)?.rebuildMenuBar()
         }
         handleDragRelease()
@@ -1082,8 +1235,8 @@ class WalkerCharacter {
     // MARK: - Hover wave (sprite-state cycle, no Y movement)
 
     func beginHover() {
-        // Hover has no effect while the chat is open.
-        guard !isHovering, !isIdleForPopover else { return }
+        // Hover has no effect while the chat is open or during a throw.
+        guard !isHovering, !isIdleForPopover, !isBallistic else { return }
         isHovering = true
         hoverStartTime = CACurrentMediaTime()
     }
