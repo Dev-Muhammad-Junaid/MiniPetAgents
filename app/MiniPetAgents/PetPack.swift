@@ -220,12 +220,30 @@ struct PetMetadata {
             }
         }
 
-        // If pet.json has no animations dict, treat the whole sheet as
-        // 9 rows of `cols` frames each, mapping rows to the canonical state order.
+        // If pet.json has no animations dict (the petdex CLI ships pets
+        // without one — see https://github.com/crafter-station/petdex
+        // `src/lib/pet-states.ts`), fall back to the canonical petdex spec.
+        // CRITICAL: each row's animation length is NOT `cols` — only the
+        // first N cells of each row are real frames, the rest are blank
+        // padding. Looping through the blank trailing cells is what caused
+        // the "sprite goes invisible at end of loop" bug.
         if animations.isEmpty {
-            for (idx, state) in PetState.allCases.enumerated() where idx < rows {
-                let frames = (0..<cols).map { idx * cols + $0 }
-                animations[state] = PetAnimation(frames: frames, fps: 8)
+            // (state, row, frameCount, durationMs) — verbatim from petdex spec.
+            let canonical: [(PetState, Int, Int, Double)] = [
+                (.idle,     0, 6, 1100),
+                (.runRight, 1, 8, 1060),
+                (.runLeft,  2, 8, 1060),
+                (.waving,   3, 4, 700),
+                (.jumping,  4, 5, 840),
+                (.failed,   5, 8, 1220),
+                (.waiting,  6, 6, 1010),
+                (.running,  7, 6, 820),
+                (.review,   8, 6, 1030),
+            ]
+            for (state, row, count, durationMs) in canonical where row < rows {
+                let frames = (0..<min(count, cols)).map { row * cols + $0 }
+                let fps = Double(count) * 1000.0 / durationMs
+                animations[state] = PetAnimation(frames: frames, fps: fps)
             }
         }
 
