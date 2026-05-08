@@ -8,13 +8,18 @@ class KeyableWindow: NSWindow {
 /// Hosts the sprite layer and handles click vs drag.
 ///
 /// Drag uses no modifier — any press-and-move past `dragThreshold` becomes a
-/// drag, anything below that on mouse-up is a click that opens the chat.
+/// drag. Drag math runs in **screen coordinates** so the cursor stays glued
+/// to the pet even as the window moves: window origin = anchor + (cursor −
+/// initialCursor). Using `event.locationInWindow` for this is wrong — once
+/// the window starts moving the locationInWindow drifts and the pet feels
+/// "sticky".
 class CharacterContentView: NSView {
     weak var character: WalkerCharacter?
-    private var dragStartLocal: NSPoint?
-    private var totalDragDistance: CGFloat = 0
+
+    private var dragInitialCursorScreen: NSPoint?
+    private var dragInitialWindowOrigin: NSPoint?
     private var didDrag = false
-    /// Pixels of movement before a press becomes a drag.
+    /// Pixels of cursor movement before a press becomes a drag.
     private static let dragThreshold: CGFloat = 3.0
 
     override func viewDidMoveToWindow() {
@@ -37,9 +42,7 @@ class CharacterContentView: NSView {
     }
 
     /// Kept for source compatibility with older controller code.
-    func refreshRepositionCursor() {
-        applyCursor()
-    }
+    func refreshRepositionCursor() { applyCursor() }
 
     private func applyCursor() {
         if character?.isShiftDraggingWindow == true {
@@ -94,44 +97,40 @@ class CharacterContentView: NSView {
     }
 
     override func mouseDown(with event: NSEvent) {
-        dragStartLocal = event.locationInWindow
-        totalDragDistance = 0
+        dragInitialCursorScreen = NSEvent.mouseLocation
+        dragInitialWindowOrigin = window?.frame.origin
         didDrag = false
         character?.isShiftDraggingWindow = false
     }
 
     override func mouseDragged(with event: NSEvent) {
-        guard let start = dragStartLocal, let win = window else { return }
-        let cur = event.locationInWindow
-        let dx = cur.x - start.x
-        let dy = cur.y - start.y
-        totalDragDistance += hypot(dx, dy)
+        guard let startCursor = dragInitialCursorScreen,
+              let startOrigin = dragInitialWindowOrigin,
+              let win = window else { return }
 
-        // Below threshold → still might be a click; don't move yet.
-        if !didDrag, totalDragDistance < Self.dragThreshold { return }
+        let cur = NSEvent.mouseLocation
+        let dx = cur.x - startCursor.x
+        let dy = cur.y - startCursor.y
 
         if !didDrag {
-            // First frame past the threshold: kick off drag mode.
+            if hypot(dx, dy) < Self.dragThreshold { return }
+            // First frame past the threshold: enter drag mode.
             didDrag = true
             character?.isShiftDraggingWindow = true
             NSCursor.closedHand.set()
             character?.beginDragSession()
         }
 
-        var o = win.frame.origin
-        o.x += dx
-        o.y += dy
-        win.setFrameOrigin(o)
-        dragStartLocal = cur
-
+        // Window origin = original origin + cumulative cursor delta. No drift.
+        win.setFrameOrigin(NSPoint(x: startOrigin.x + dx, y: startOrigin.y + dy))
         character?.updateDragSession()
     }
 
     override func mouseUp(with event: NSEvent) {
         let wasDrag = didDrag
-        dragStartLocal = nil
+        dragInitialCursorScreen = nil
+        dragInitialWindowOrigin = nil
         didDrag = false
-        totalDragDistance = 0
         character?.isShiftDraggingWindow = false
 
         if wasDrag {

@@ -253,6 +253,22 @@ class WalkerCharacter {
         spriteLayer.backgroundColor = NSColor.clear.cgColor
         spriteLayer.frame = CGRect(x: 0, y: 0, width: displayWidth, height: displayHeight)
         spriteLayer.magnificationFilter = .nearest // crisp pixel art
+        // Belt-and-suspenders: disable every implicit animation so swapping
+        // `contents` (frame change), flipping `transform` (direction change),
+        // or resizing `bounds` never cross-fades the sprite. Without this,
+        // CALayer's default 0.25s fade can cause the pet to briefly "go
+        // invisible" when state changes happen outside our explicit
+        // CATransaction blocks.
+        spriteLayer.actions = [
+            "contents":   NSNull(),
+            "transform":  NSNull(),
+            "bounds":     NSNull(),
+            "position":   NSNull(),
+            "frame":      NSNull(),
+            "opacity":    NSNull(),
+            "hidden":     NSNull(),
+            "sublayers":  NSNull(),
+        ]
 
         if let pack = petPack {
             animator = SpriteAnimator(pack: pack, layer: spriteLayer)
