@@ -190,11 +190,9 @@ class WalkerCharacter {
     private var ballisticLastTick: CFTimeInterval = 0
     /// Tunables — chosen for "feels good on a 16-inch laptop screen".
     private static let throwSpeedThreshold: CGFloat = 350      // pt/s release speed needed to trigger throw
-    private static let ballisticGravity: CGFloat = 1800        // pt/s² downward
-    private static let ballisticAirDrag: CGFloat = 0.6         // per-second exponential decay of velocity
-    private static let ballisticRestitution: CGFloat = 0.55    // bounce energy retention
-    private static let ballisticFloorRestitution: CGFloat = 0.45
-    private static let ballisticSettleSpeed: CGFloat = 80      // |v| below this on the floor → land
+    private static let ballisticAirDrag: CGFloat = 1.4         // per-second exponential decay (higher = stops sooner)
+    private static let ballisticRestitution: CGFloat = 0.7     // bounce energy retained on any wall
+    private static let ballisticSettleSpeed: CGFloat = 60      // |v| below this → settle wherever the pet is
 
     // MARK: - Onboarding
 
@@ -456,17 +454,18 @@ class WalkerCharacter {
         setSpriteState(.jumping, source: .ui)
     }
 
-    /// Per-tick ballistic integration. Bounces off the visible-frame edges
-    /// and the dock-top "floor"; settles when slow enough to be parked.
+    /// Per-tick ballistic integration. No gravity — pure inertial glide with
+    /// air drag, bouncing off all four edges of the visible frame. Settles
+    /// wherever the pet runs out of momentum.
     func tickBallistic(now: CFTimeInterval, context ctx: PlacementContext) {
         guard isBallistic, let win = window else { return }
 
         let dt = max(0.0, min(0.05, CGFloat(now - ballisticLastTick)))   // clamp for stability
         ballisticLastTick = now
 
-        // Gravity + exponential air drag.
-        ballisticVy -= Self.ballisticGravity * dt
-        let dragMul = pow(1.0 - Self.ballisticAirDrag, dt)
+        // Exponential air drag on both axes. No gravity — the throw is the
+        // only force; the pet glides until friction kills it.
+        let dragMul = pow(1.0 - min(Self.ballisticAirDrag * dt, 0.95), 1)
         ballisticVx *= dragMul
         ballisticVy *= dragMul
 
@@ -477,61 +476,55 @@ class WalkerCharacter {
         let bounds = ctx.screen.visibleFrame
         let minX = bounds.minX
         let maxX = bounds.maxX - displayWidth
-        let minY: CGFloat = ctx.hasDock ? ctx.dockTopY : bounds.minY
+        let minY = bounds.minY
         let maxY = bounds.maxY - displayWidth   // sprite is square
 
-        // Walls.
+        // All four walls bounce identically. No floor-vs-wall distinction —
+        // the pet can stop and float anywhere, dock or no dock.
         if origin.x < minX {
             origin.x = minX
             ballisticVx = -ballisticVx * Self.ballisticRestitution
-            goingRight = ballisticVx >= 0
         } else if origin.x > maxX {
             origin.x = maxX
             ballisticVx = -ballisticVx * Self.ballisticRestitution
-            goingRight = ballisticVx >= 0
         }
-        // Ceiling.
-        if origin.y > maxY {
+        if origin.y < minY {
+            origin.y = minY
+            ballisticVy = -ballisticVy * Self.ballisticRestitution
+        } else if origin.y > maxY {
             origin.y = maxY
             ballisticVy = -ballisticVy * Self.ballisticRestitution
         }
-        // Floor — and check for settle.
-        if origin.y < minY {
-            origin.y = minY
-            ballisticVy = -ballisticVy * Self.ballisticFloorRestitution
-            ballisticVx *= 0.85   // friction with the floor
-            // Settle if we don't have enough oomph to leave the floor again.
-            if abs(ballisticVy) < 60, hypot(ballisticVx, ballisticVy) < Self.ballisticSettleSpeed {
-                origin.y = minY
-                ballisticVx = 0
-                ballisticVy = 0
-                win.setFrameOrigin(origin)
-                finishBallistic()
-                return
-            }
-        }
+
+        // Update facing from current motion so the sprite reads correctly.
+        if abs(ballisticVx) > 20 { goingRight = ballisticVx >= 0 }
 
         win.setFrameOrigin(origin)
         updateFlip()
         updatePopoverPosition()
         updateThinkingBubble()
+
+        // Settle anywhere on screen once we run out of energy.
+        if hypot(ballisticVx, ballisticVy) < Self.ballisticSettleSpeed {
+            ballisticVx = 0
+            ballisticVy = 0
+            finishBallistic()
+        }
     }
 
     private func finishBallistic() {
         isBallistic = false
-        // Resolve the drop zone from the LANDED position (not where the user
-        // released the cursor) — that's what feels right when you throw a pet
-        // and it skids onto the dock or lands in free-roam space.
-        guard let win = window else { return }
-        let center = NSPoint(x: win.frame.midX, y: win.frame.midY)
-        let resolved = DropZoneOverlay.shared.zoneAt(center)
-        if resolved != placement, let pet = PetLibrary.shared.pet(slug: petSlug) {
-            pet.placement = resolved
-            placement = resolved
-            roamTargetX = nil
-            roamTargetY = nil
+        // After a throw, always switch to free-roam — the pet stops wherever
+        // it ran out of momentum and starts wandering from there. (Slow
+        // drops keep using the drag-to-zone resolver; this path is only
+        // reached for fast releases.)
+        if placement != .freeRoam, let pet = PetLibrary.shared.pet(slug: petSlug) {
+            pet.placement = .freeRoam
+            placement = .freeRoam
             (NSApp.delegate as? AppDelegate)?.rebuildMenuBar()
         }
+        roamTargetX = nil
+        roamTargetY = nil
         handleDragRelease()
     }
 
