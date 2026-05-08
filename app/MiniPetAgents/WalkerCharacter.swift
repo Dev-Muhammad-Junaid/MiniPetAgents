@@ -1031,31 +1031,28 @@ class WalkerCharacter {
         isPaused = true
 
         let now = CACurrentMediaTime()
+        // On the dock, when we arrive at either edge, throw in a flourish
+        // before the next leg: a happy hop most of the time, occasionally a
+        // longer "stretch and look around" idle, and rarely kick into a run
+        // for the return trip (handled on the next startWalk via the planner).
         let atDockEdge = placement == .dock && (positionProgress >= 0.96 || positionProgress <= 0.04)
 
-        // At a dock edge: 70% chance to play `.jumping` for ~1.2 s before
-        // turning around — that's the only intentional gap between legs.
-        if isWalkLikeState(spriteState),
-           atDockEdge, Double.random(in: 0...1) < 0.7 {
-            setSpriteState(.jumping, source: .planner)
-            pauseEndTime = now + Double.random(in: 1.0...1.4)
-            return
-        }
-
-        // Otherwise chain straight into the next leg. We keep a tiny random
-        // delay so the directional sprite swap reads as a clear "turn"
-        // instead of one continuous frame (also gives the planner a chance
-        // to inject `.running` bursts), but it's well under perception.
         if isWalkLikeState(spriteState) {
-            // Skip the .idle detour — the next startWalk will pick the
-            // correct directional run sprite. Dropping the .idle hop here
-            // is what removes the visible "standing still" gap between
-            // legs that the user reported.
+            // At a dock edge there's a 70% chance the pet plays its `.jumping`
+            // sprite before turning around — a native-frame "bounce", no
+            // synthetic squash transform.
+            if atDockEdge, Double.random(in: 0...1) < 0.7 {
+                setSpriteState(.jumping, source: .planner)
+                pauseEndTime = now + Double.random(in: 1.0...1.6)
+                return
+            }
+            setSpriteState(.idle, source: .planner)
         }
 
+        // Shorter pauses on the dock so the pet keeps pacing.
         let delay = placement == .dock
-            ? Double.random(in: 0.04...0.18)         // ≈40–180 ms
-            : Double.random(in: 0.20...0.80)         // free roam: still snappy
+            ? Double.random(in: 1.0...3.5)
+            : Double.random(in: 5.0...12.0)
         pauseEndTime = now + delay
     }
 
