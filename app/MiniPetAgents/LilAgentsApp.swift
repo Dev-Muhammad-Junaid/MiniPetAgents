@@ -453,42 +453,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         speedRoot.submenu = speedMenu
         parent.addItem(speedRoot)
 
-        // Idle wander toggle
-        let wanderItem = NSMenuItem(title: "  Idle wander",
-                                    action: #selector(toggleIdleWander(_:)),
-                                    keyEquivalent: "")
-        let wanderOn = slug.map { PetLibrary.resolvedIdleWander(for: $0) } ?? PetLibrary.resolvedIdleWander(for: "")
-        wanderItem.state = wanderOn ? .on : .off
-        wanderItem.representedObject = slug ?? ""
-        wanderItem.target = self
-        parent.addItem(wanderItem)
-
-        // Pause-while-talking toggle
-        let pauseItem = NSMenuItem(title: "  Pause while talking",
-                                   action: #selector(togglePauseWhileTalking(_:)),
-                                   keyEquivalent: "")
-        let pauseOn = slug.map { PetLibrary.resolvedPauseWhileTalking(for: $0) } ?? PetLibrary.resolvedPauseWhileTalking(for: "")
-        pauseItem.state = pauseOn ? .on : .off
-        pauseItem.representedObject = slug ?? ""
-        pauseItem.target = self
-        parent.addItem(pauseItem)
-
-        // Free-roam region picker (only meaningful in freeRoam placement)
-        let regionRoot = NSMenuItem(title: "  Free-roam region", action: nil, keyEquivalent: "")
-        let regionMenu = NSMenu()
-        let currentRegion = slug.map { PetLibrary.resolvedRoamRegion(for: $0) } ?? PetLibrary.resolvedRoamRegion(for: "")
-        for r in RoamRegion.allCases {
-            let mi = NSMenuItem(title: r.displayName, action: #selector(setRoamRegion(_:)), keyEquivalent: "")
-            mi.state = r == currentRegion ? .on : .off
-            mi.representedObject = ["slug": slug ?? "", "value": r.rawValue]
-            mi.target = self
-            regionMenu.addItem(mi)
-        }
-        regionRoot.submenu = regionMenu
-        // Disable the parent for per-pet menus when placement isn't freeRoam — still shows current value.
-        if let p = placement, p != .freeRoam { regionRoot.isEnabled = false }
-        parent.addItem(regionRoot)
-
         // "Use app default" reset (per-pet menus only)
         if slug != nil {
             let reset = NSMenuItem(title: "  Reset to app defaults",
@@ -525,35 +489,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         rebuildMenuBar()
     }
 
-    @objc func toggleIdleWander(_ sender: NSMenuItem) {
-        let slug = slugFromInfo(sender)
-        let current = slug.map { PetLibrary.resolvedIdleWander(for: $0) } ?? PetLibrary.resolvedIdleWander(for: "")
-        PetLibrary.setIdleWander(!current, for: slug)
-        rebuildMenuBar()
-    }
-
-    @objc func togglePauseWhileTalking(_ sender: NSMenuItem) {
-        let slug = slugFromInfo(sender)
-        let current = slug.map { PetLibrary.resolvedPauseWhileTalking(for: $0) } ?? PetLibrary.resolvedPauseWhileTalking(for: "")
-        PetLibrary.setPauseWhileTalking(!current, for: slug)
-        rebuildMenuBar()
-    }
-
-    @objc func setRoamRegion(_ sender: NSMenuItem) {
-        guard let info = sender.representedObject as? [String: String],
-              let raw = info["value"], let region = RoamRegion(rawValue: raw) else { return }
-        let slug = (info["slug"] ?? "").isEmpty ? nil : info["slug"]
-        PetLibrary.setRoamRegion(region, for: slug)
-        rebuildMenuBar()
-    }
-
     @objc func resetAnimationOverrides(_ sender: NSMenuItem) {
         guard let slug = sender.representedObject as? String else { return }
         PetLibrary.setMovementMode(nil, for: slug)
         PetLibrary.setWalkSpeed(nil, for: slug)
-        PetLibrary.setIdleWander(nil, for: slug)
-        PetLibrary.setPauseWhileTalking(nil, for: slug)
-        PetLibrary.setRoamRegion(nil, for: slug)
         rebuildMenuBar()
     }
 }

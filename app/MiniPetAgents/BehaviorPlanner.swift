@@ -9,9 +9,8 @@ import QuartzCore
 /// (`idle`, `walk`, `run`, `sleep`).
 ///
 /// Behavior is shaped by the per-pet preferences resolved through `PetLibrary`:
-///  - `MovementMode` (sprite-driven / always-walk / stationary)
+///  - `MovementMode` (sprite-driven / stationary)
 ///  - `WalkSpeed` (slow / normal / fast) — applied via `walkSpeedMultiplier`
-///  - `idleWander` — when false the pet never spontaneously starts a walk
 ///
 /// The planner does not move the window itself; placement strategies do that.
 final class BehaviorPlanner {
@@ -73,22 +72,12 @@ final class BehaviorPlanner {
             if pet.spriteState != .idle { pet.setSpriteState(.idle, source: .planner) }
             return
 
-        case .alwaysWalk:
-            // Never sleep; if idle, kick a walk soon.
-            if pet.spriteState == .sleep { pet.setSpriteState(.idle, source: .planner) }
-            if pet.isPaused, pet.pauseEndTime == .greatestFiniteMagnitude {
-                pet.pauseEndTime = now + Double.random(in: 0.5...2.0)
-            }
-            return
-
         case .spriteDriven:
             handleSpriteDriven(pet: pet, now: now)
         }
     }
 
     private func handleSpriteDriven(pet: WalkerCharacter, now: CFTimeInterval) {
-        let wander = PetLibrary.resolvedIdleWander(for: pet.petSlug)
-
         // Wind down a transient flourish (.happy mid-idle dance).
         if pet.spriteState == .happy, now >= flourishUntil {
             pet.setSpriteState(.idle, source: .planner)
@@ -122,12 +111,9 @@ final class BehaviorPlanner {
             return                   // walking handled by enterPause/startWalk loop
         }
 
-        // .idle from here on.
-        if !wander {
-            // Hold idle indefinitely; never start walks autonomously.
-            pet.pauseEndTime = .greatestFiniteMagnitude
-            return
-        }
+        // .idle from here on. Keep nudging pauseEndTime to a finite value so
+        // the pet eventually wanders again (the only way to "stop wandering"
+        // is to switch to MovementMode.stationary).
         if pet.pauseEndTime == .greatestFiniteMagnitude {
             pet.pauseEndTime = now + Double.random(in: 1.0...3.0)
         }

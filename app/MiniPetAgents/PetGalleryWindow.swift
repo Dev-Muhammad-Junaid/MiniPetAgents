@@ -153,130 +153,71 @@ private struct PetRow: View {
 
     @State private var preview: NSImage?
     @State private var spawned: Bool = false
-    @State private var placement: PlacementMode = .dock
     @State private var providerOverride: AgentProvider? = nil
     @State private var sizeChoice: String = "default"
-    @State private var movementMode: MovementMode = .spriteDriven
-    @State private var walkSpeed: WalkSpeed = .normal
-    @State private var idleWander: Bool = true
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 12) {
-                previewView
-                    .frame(width: 56, height: 56)
-                    .background(Color.secondary.opacity(0.1))
-                    .cornerRadius(8)
+        // Single-row layout. Placement, walk speed, and movement mode now
+        // live in the menubar / drag-to-zone UX; the gallery is just the
+        // pet roster.
+        HStack(spacing: 12) {
+            previewView
+                .frame(width: 48, height: 48)
+                .background(Color.secondary.opacity(0.1))
+                .cornerRadius(8)
 
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(pet.slug).font(.headline)
-                    Text(pet.folderURL.path)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                }
-
-                Spacer()
-
-                Picker("Placement", selection: $placement) {
-                    ForEach(PlacementMode.allCases, id: \.self) { mode in
-                        Text(mode.displayName).tag(mode)
-                    }
-                }
-                .labelsHidden()
-                .frame(width: 120)
-                .onChange(of: placement) { newValue in
-                    pet.placement = newValue
-                    controller?.refreshPet(slug: pet.slug)
-                }
-
-                Picker("Provider", selection: providerBinding) {
-                    Text("Default").tag(AgentProvider?.none)
-                    ForEach(AgentProvider.allCases, id: \.self) { p in
-                        Text(p.displayName).tag(AgentProvider?.some(p))
-                    }
-                }
-                .labelsHidden()
-                .frame(width: 100)
-
-                Picker("Size", selection: $sizeChoice) {
-                    Text("Def").tag("default")
-                    ForEach(PetLibrary.displayHeightPresets, id: \.self) { h in
-                        Text("\(Int(h))").tag("\(Int(h))")
-                    }
-                }
-                .labelsHidden()
-                .frame(width: 70)
-                .onChange(of: sizeChoice) { _, newVal in
-                    applySizeChoice(newVal)
-                }
-
-                Toggle(isOn: $spawned) {
-                    Text(spawned ? "Spawned" : "Spawn")
-                }
-                .toggleStyle(.switch)
-                .onChange(of: spawned) { newValue in
-                    pet.isSpawned = newValue
-                    if newValue { controller?.spawn(pet: pet) } else { controller?.despawn(slug: pet.slug) }
-                    onChange()
-                }
-
-                Button("Open Chat") {
-                    controller?.openChat(slug: pet.slug)
-                }
-                .disabled(!spawned)
-            }
-
-            // Second row: animation & movement controls (compact, indented under preview).
-            HStack(spacing: 10) {
-                Spacer().frame(width: 56) // align under preview
-                Text("Movement")
+            VStack(alignment: .leading, spacing: 2) {
+                Text(pet.slug).font(.headline)
+                Text(pet.folderURL.path)
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                Picker("Mode", selection: $movementMode) {
-                    ForEach(MovementMode.allCases, id: \.self) { m in
-                        Text(m.displayName).tag(m)
-                    }
-                }
-                .labelsHidden()
-                .frame(width: 130)
-                .onChange(of: movementMode) { newValue in
-                    PetLibrary.setMovementMode(newValue, for: pet.slug)
-                }
-
-                Text("Speed")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Picker("Speed", selection: $walkSpeed) {
-                    ForEach(WalkSpeed.allCases, id: \.self) { s in
-                        Text(s.displayName).tag(s)
-                    }
-                }
-                .labelsHidden()
-                .frame(width: 90)
-                .onChange(of: walkSpeed) { newValue in
-                    PetLibrary.setWalkSpeed(newValue, for: pet.slug)
-                }
-
-                Toggle(isOn: $idleWander) { Text("Idle wander") }
-                    .toggleStyle(.checkbox)
-                    .onChange(of: idleWander) { newValue in
-                        PetLibrary.setIdleWander(newValue, for: pet.slug)
-                    }
-
-                Spacer()
+                    .lineLimit(1)
+                    .truncationMode(.middle)
             }
+
+            Spacer()
+
+            Picker("Provider", selection: providerBinding) {
+                Text("Default").tag(AgentProvider?.none)
+                ForEach(AgentProvider.allCases, id: \.self) { p in
+                    Text(p.displayName).tag(AgentProvider?.some(p))
+                }
+            }
+            .labelsHidden()
+            .frame(width: 100)
+
+            Picker("Size", selection: $sizeChoice) {
+                Text("Def").tag("default")
+                ForEach(PetLibrary.displayHeightPresets, id: \.self) { h in
+                    Text("\(Int(h))").tag("\(Int(h))")
+                }
+            }
+            .labelsHidden()
+            .frame(width: 70)
+            .onChange(of: sizeChoice) { _, newVal in
+                applySizeChoice(newVal)
+            }
+
+            Toggle(isOn: $spawned) {
+                Text(spawned ? "Spawned" : "Spawn")
+            }
+            .toggleStyle(.switch)
+            .onChange(of: spawned) { newValue in
+                pet.isSpawned = newValue
+                if newValue { controller?.spawn(pet: pet) } else { controller?.despawn(slug: pet.slug) }
+                onChange()
+            }
+
+            Button("Open Chat") {
+                controller?.openChat(slug: pet.slug)
+            }
+            .disabled(!spawned)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
         .onAppear {
             spawned = pet.isSpawned
-            placement = pet.placement
             providerOverride = pet.providerOverride
-            movementMode = pet.resolvedMovementMode
-            walkSpeed = pet.resolvedWalkSpeed
-            idleWander = pet.resolvedIdleWander
             if let s = PetLibrary.storedPerPetDisplayHeight(slug: pet.slug) {
                 sizeChoice = "\(Int(s))"
             } else {

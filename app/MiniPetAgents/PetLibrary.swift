@@ -27,9 +27,6 @@ final class InstalledPet {
 
     var resolvedMovementMode: MovementMode { PetLibrary.resolvedMovementMode(for: slug) }
     var resolvedWalkSpeed: WalkSpeed       { PetLibrary.resolvedWalkSpeed(for: slug) }
-    var resolvedIdleWander: Bool           { PetLibrary.resolvedIdleWander(for: slug) }
-    var resolvedPauseWhileTalking: Bool    { PetLibrary.resolvedPauseWhileTalking(for: slug) }
-    var resolvedRoamRegion: RoamRegion     { PetLibrary.resolvedRoamRegion(for: slug) }
 
     init(slug: String, folderURL: URL) {
         self.slug = slug
@@ -269,19 +266,11 @@ final class PetLibrary {
 
     // MARK: - Animation & movement preferences
 
-    private static func movementModeKey(_ slug: String) -> String        { "pet.\(slug).movementMode" }
-    private static func walkSpeedKey(_ slug: String) -> String           { "pet.\(slug).walkSpeed" }
-    private static func idleWanderKey(_ slug: String) -> String          { "pet.\(slug).idleWander" }
-    private static func pauseWhileTalkingKey(_ slug: String) -> String   { "pet.\(slug).pauseWhileTalking" }
-    private static func roamRegionKey(_ slug: String) -> String          { "pet.\(slug).roamRegion" }
+    private static func movementModeKey(_ slug: String) -> String { "pet.\(slug).movementMode" }
+    private static func walkSpeedKey(_ slug: String) -> String    { "pet.\(slug).walkSpeed" }
 
-    private static let appMovementModeKey      = "app.movementMode"
-    private static let appWalkSpeedKey         = "app.walkSpeed"
-    private static let appIdleWanderKey        = "app.idleWander"
-    private static let appPauseWhileTalkingKey = "app.pauseWhileTalking"
-    private static let appRoamRegionKey        = "app.roamRegion"
-
-    // Resolved (per-pet override → app default → built-in default)
+    private static let appMovementModeKey = "app.movementMode"
+    private static let appWalkSpeedKey    = "app.walkSpeed"
 
     static func resolvedMovementMode(for slug: String) -> MovementMode {
         if let raw = UserDefaults.standard.string(forKey: movementModeKey(slug)),
@@ -297,33 +286,6 @@ final class PetLibrary {
            let v = WalkSpeed(rawValue: raw) { return v }
         return .normal
     }
-    static func resolvedIdleWander(for slug: String) -> Bool {
-        if UserDefaults.standard.object(forKey: idleWanderKey(slug)) != nil {
-            return UserDefaults.standard.bool(forKey: idleWanderKey(slug))
-        }
-        if UserDefaults.standard.object(forKey: appIdleWanderKey) != nil {
-            return UserDefaults.standard.bool(forKey: appIdleWanderKey)
-        }
-        return true
-    }
-    static func resolvedPauseWhileTalking(for slug: String) -> Bool {
-        if UserDefaults.standard.object(forKey: pauseWhileTalkingKey(slug)) != nil {
-            return UserDefaults.standard.bool(forKey: pauseWhileTalkingKey(slug))
-        }
-        if UserDefaults.standard.object(forKey: appPauseWhileTalkingKey) != nil {
-            return UserDefaults.standard.bool(forKey: appPauseWhileTalkingKey)
-        }
-        return true
-    }
-    static func resolvedRoamRegion(for slug: String) -> RoamRegion {
-        if let raw = UserDefaults.standard.string(forKey: roamRegionKey(slug)),
-           let v = RoamRegion(rawValue: raw) { return v }
-        if let raw = UserDefaults.standard.string(forKey: appRoamRegionKey),
-           let v = RoamRegion(rawValue: raw) { return v }
-        return .screen
-    }
-
-    // Stored (per-pet only — nil means "inherit app default")
 
     static func storedMovementMode(slug: String) -> MovementMode? {
         UserDefaults.standard.string(forKey: movementModeKey(slug)).flatMap(MovementMode.init(rawValue:))
@@ -331,19 +293,6 @@ final class PetLibrary {
     static func storedWalkSpeed(slug: String) -> WalkSpeed? {
         UserDefaults.standard.string(forKey: walkSpeedKey(slug)).flatMap(WalkSpeed.init(rawValue:))
     }
-    static func storedIdleWander(slug: String) -> Bool? {
-        guard UserDefaults.standard.object(forKey: idleWanderKey(slug)) != nil else { return nil }
-        return UserDefaults.standard.bool(forKey: idleWanderKey(slug))
-    }
-    static func storedPauseWhileTalking(slug: String) -> Bool? {
-        guard UserDefaults.standard.object(forKey: pauseWhileTalkingKey(slug)) != nil else { return nil }
-        return UserDefaults.standard.bool(forKey: pauseWhileTalkingKey(slug))
-    }
-    static func storedRoamRegion(slug: String) -> RoamRegion? {
-        UserDefaults.standard.string(forKey: roamRegionKey(slug)).flatMap(RoamRegion.init(rawValue:))
-    }
-
-    // Setters
 
     static func setMovementMode(_ value: MovementMode?, for slug: String?) {
         let key = slug.map { movementModeKey($0) } ?? appMovementModeKey
@@ -357,33 +306,17 @@ final class PetLibrary {
         else { UserDefaults.standard.removeObject(forKey: key) }
         NotificationCenter.default.post(name: layoutPreferencesDidChange, object: nil)
     }
-    static func setIdleWander(_ value: Bool?, for slug: String?) {
-        let key = slug.map { idleWanderKey($0) } ?? appIdleWanderKey
-        if let v = value { UserDefaults.standard.set(v, forKey: key) }
-        else { UserDefaults.standard.removeObject(forKey: key) }
-        NotificationCenter.default.post(name: layoutPreferencesDidChange, object: nil)
-    }
-    static func setPauseWhileTalking(_ value: Bool?, for slug: String?) {
-        let key = slug.map { pauseWhileTalkingKey($0) } ?? appPauseWhileTalkingKey
-        if let v = value { UserDefaults.standard.set(v, forKey: key) }
-        else { UserDefaults.standard.removeObject(forKey: key) }
-        NotificationCenter.default.post(name: layoutPreferencesDidChange, object: nil)
-    }
-    static func setRoamRegion(_ value: RoamRegion?, for slug: String?) {
-        let key = slug.map { roamRegionKey($0) } ?? appRoamRegionKey
-        if let v = value { UserDefaults.standard.set(v.rawValue, forKey: key) }
-        else { UserDefaults.standard.removeObject(forKey: key) }
-        NotificationCenter.default.post(name: layoutPreferencesDidChange, object: nil)
-    }
 
     // MARK: - Orphan-prune for uninstalled pets
 
     /// All per-pet UserDefaults key suffixes we own. Used to clean up when a slug disappears.
     private static let perPetKeySuffixes: [String] = [
         "placement", "provider", "spawned",
-        "displayHeight", "pinnedScreenOrigin", "edge",
-        "movementMode", "walkSpeed", "idleWander", "pauseWhileTalking", "roamRegion",
-        "popoverSize"
+        "displayHeight", "pinnedScreenOrigin",
+        "movementMode", "walkSpeed",
+        "popoverSize",
+        // Legacy keys still pruned so old installs clean up:
+        "idleWander", "pauseWhileTalking", "roamRegion", "edge"
     ]
 
     private func pruneOrphanedPreferences(validSlugs: Set<String>) {
@@ -406,11 +339,10 @@ final class PetLibrary {
 // MARK: - Animation & movement value types
 
 enum MovementMode: String, CaseIterable {
-    case spriteDriven, alwaysWalk, stationary
+    case spriteDriven, stationary
     var displayName: String {
         switch self {
         case .spriteDriven: return "Sprite-driven"
-        case .alwaysWalk:   return "Always walk"
         case .stationary:   return "Stationary"
         }
     }
@@ -435,23 +367,3 @@ enum WalkSpeed: String, CaseIterable {
     }
 }
 
-enum RoamRegion: String, CaseIterable {
-    case screen, topHalf, bottomHalf
-    var displayName: String {
-        switch self {
-        case .screen:     return "Whole screen"
-        case .topHalf:    return "Top half"
-        case .bottomHalf: return "Bottom half"
-        }
-    }
-    /// Crop the screen's `visibleFrame` to this region.
-    func bounds(within visibleFrame: NSRect) -> NSRect {
-        switch self {
-        case .screen:     return visibleFrame
-        case .topHalf:    return NSRect(x: visibleFrame.minX, y: visibleFrame.midY,
-                                        width: visibleFrame.width, height: visibleFrame.height / 2)
-        case .bottomHalf: return NSRect(x: visibleFrame.minX, y: visibleFrame.minY,
-                                        width: visibleFrame.width, height: visibleFrame.height / 2)
-        }
-    }
-}

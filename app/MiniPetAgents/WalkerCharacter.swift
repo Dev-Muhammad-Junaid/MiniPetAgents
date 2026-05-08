@@ -221,16 +221,11 @@ class WalkerCharacter {
         spriteState = state
     }
 
-    /// States during which the pet should hold position (sprite still animates).
-    /// `pauseWhileTalking == false` removes `.talking` from this set.
-    /// Caller is expected to only consult this when `isAgentBusy || isIdleForPopover`
-    /// is true — otherwise a sticky session-driven state (e.g. `.sad`) would
+    /// States during which the pet should hold position while the sprite
+    /// keeps animating. Caller must guard with `shouldHoldForActivity`
+    /// (popover open or agent busy) so a stale session-driven state can't
     /// freeze the pet forever.
-    func motionHoldStates(pauseWhileTalking: Bool) -> Set<PetState> {
-        var s: Set<PetState> = [.sleep, .think, .working]
-        if pauseWhileTalking { s.insert(.talking) }
-        return s
-    }
+    var motionHoldStates: Set<PetState> { [.sleep, .think, .working, .talking] }
 
     /// True if the pet has reason to hold position right now: the agent is
     /// busy, the popover is open, or the pet just woke up sad/asleep.
@@ -684,7 +679,10 @@ class WalkerCharacter {
 
     func updatePopoverPosition() {
         guard let popover = popoverWindow, isIdleForPopover else { return }
-        guard let screen = NSScreen.main else { return }
+        // Use the screen the *pet* is on, not NSScreen.main. Otherwise the
+        // popover gets clamped to the main display when the pet is on a
+        // secondary monitor and ends up appearing on the wrong screen.
+        guard let screen = window.screen ?? NSScreen.main else { return }
 
         let charFrame = window.frame
         let popoverSize = popover.frame.size
@@ -1091,9 +1089,7 @@ class WalkerCharacter {
             // been busy / popover open for ≥ 200 ms AND the sprite is in a
             // hold state. Single-tick churn from session callbacks no longer
             // stutters the walk.
-            let pauseWhileTalking = PetLibrary.resolvedPauseWhileTalking(for: petSlug)
-            let wantsHold = shouldHoldForActivity
-                && motionHoldStates(pauseWhileTalking: pauseWhileTalking).contains(spriteState)
+            let wantsHold = shouldHoldForActivity && motionHoldStates.contains(spriteState)
             if wantsHold {
                 if holdRequestStart == nil { holdRequestStart = now }
             } else {
