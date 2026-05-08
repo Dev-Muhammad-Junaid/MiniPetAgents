@@ -269,6 +269,13 @@ final class PetAgentsController {
                 char.updatePopoverPosition()
                 continue
             }
+            // Hover takes over: freeze motion, cycle sprite state. Skip the
+            // placement strategy so the pet doesn't slide while waving.
+            if char.isHovering {
+                char.tickHover(now: now)
+                char.updateThinkingBubble()
+                continue
+            }
             let strat = PlacementStrategies.strategy(for: char.placement)
             strat.update(char, context: context)
         }

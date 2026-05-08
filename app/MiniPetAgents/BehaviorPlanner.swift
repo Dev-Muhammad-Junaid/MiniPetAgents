@@ -38,6 +38,10 @@ final class BehaviorPlanner {
 
     func tick(at now: CFTimeInterval) {
         guard let pet = pet else { return }
+        // While the user is hovering, the pet's sprite state is owned by
+        // tickHover (cycling .happy ↔ .idle). The planner stays out so its
+        // post-quiet-window cleanup doesn't fight that cycle.
+        if pet.isHovering { return }
         // Apply walk-speed multiplier every tick (cheap; keeps live menu changes responsive).
         pet.walkSpeedMultiplier = PetLibrary.resolvedWalkSpeed(for: pet.petSlug).multiplier
 

@@ -1035,10 +1035,13 @@ class WalkerCharacter {
         var t = CATransform3DIdentity
         if !goingRight { t = CATransform3DScale(t, -1, 1, 1) }
 
-        if isHovering {
-            // ~6° wave at ~5 Hz — playful but not seizure-inducing.
-            let phase = (now - hoverStartTime) * 5.0
-            let angle = sin(phase * 2 * .pi) * (6.0 * .pi / 180.0)
+        // Rotation wave only fires during the WAVE phase of the hover cycle —
+        // during JUMP the `.happy` sprite frames carry the motion, and during
+        // IDLE the pet rests. Outside hover, no rotation.
+        if isHovering, hoverPhase(at: now) == .wave {
+            // ~7° wave at ~5 Hz — playful but not seizure-inducing.
+            let phaseT = (now - hoverStartTime) * 5.0
+            let angle = sin(phaseT * 2 * .pi) * (7.0 * .pi / 180.0)
             t = CATransform3DRotate(t, CGFloat(angle), 0, 0, 1)
         }
 
@@ -1060,27 +1063,66 @@ class WalkerCharacter {
     /// wrapper that goes through the unified transform pipeline.
     func updateFlip() { applySpriteTransform() }
 
-    // MARK: - Hover wave
+    // MARK: - Hover wave (sprite-state cycle, no Y movement)
+
+    /// Three-phase hover cycle: WAVE (rotation wiggle on the idle sprite) →
+    /// JUMP (`.happy` sprite frames, no rotation) → IDLE (rest), repeat.
+    /// All phases hold the pet's window position constant — there is no
+    /// Y translation in any phase.
+    enum HoverPhase { case wave, jump, idle }
+    private static let hoverWaveDuration:  CFTimeInterval = 0.6
+    private static let hoverJumpDuration:  CFTimeInterval = 0.7
+    private static let hoverIdleDuration:  CFTimeInterval = 0.4
+    private var hoverCyclePeriod: CFTimeInterval {
+        Self.hoverWaveDuration + Self.hoverJumpDuration + Self.hoverIdleDuration
+    }
+    fileprivate func hoverPhase(at now: CFTimeInterval) -> HoverPhase {
+        let phase = (now - hoverStartTime).truncatingRemainder(dividingBy: hoverCyclePeriod)
+        if phase < Self.hoverWaveDuration { return .wave }
+        if phase < Self.hoverWaveDuration + Self.hoverJumpDuration { return .jump }
+        return .idle
+    }
 
     func beginHover() {
-        guard !isHovering else { return }
+        // No-op while the chat popover is open — hover should have no
+        // effect during a conversation.
+        guard !isHovering, !isIdleForPopover else { return }
         isHovering = true
         hoverStartTime = CACurrentMediaTime()
     }
 
     func endHover() {
+        guard isHovering else { return }
         isHovering = false
+        // Drop back to idle so the next planner tick can resume normal mood.
+        if spriteState == .happy { setSpriteState(.idle, source: .ui) }
         applySpriteTransform()
     }
 
-    /// Vertical hover-bounce offset added to the pet's y origin while hovering.
-    /// Smaller than the completion hop so it reads as continuous bouncing.
-    func hoverBounceOffset(now: CFTimeInterval) -> CGFloat {
-        guard isHovering else { return 0 }
-        let phase = (now - hoverStartTime) * 4.0
-        let amp = displayHeight * 0.05
-        return amp * CGFloat(abs(sin(phase * .pi)))      // bounce, never negative
+    /// Called from the controller's per-tick loop. Cycles the sprite state
+    /// between `.happy` and `.idle` while hovering. Freezes the walk clock
+    /// so the pet doesn't drift across the dock while waving.
+    func tickHover(now: CFTimeInterval) {
+        // Defensive: chat opened while hovering — bail and revert.
+        if isHovering, isIdleForPopover {
+            endHover()
+            return
+        }
+        guard isHovering else { return }
+
+        let phase = hoverPhase(at: now)
+        let target: PetState = phase == .jump ? .happy : .idle
+        if spriteState != target {
+            setSpriteState(target, source: .ui)
+        }
+        // Hover freezes motion so the pet stays in place while waving.
+        freezeWalkClock(at: now)
     }
+
+    /// Returns 0 unconditionally. Hover no longer translates the window —
+    /// hover reads through a sprite-state loop (`.happy` ↔ `.idle`) plus
+    /// the rotation wave layered onto the sprite transform.
+    func hoverBounceOffset(now: CFTimeInterval) -> CGFloat { 0 }
 
     /// Trigger a brief squash/stretch — used for dock-edge bumps.
     func triggerEdgeBump() {
@@ -1112,18 +1154,11 @@ class WalkerCharacter {
     }
 
     /// Vertical bounce applied while `spriteState == .happy` (8-frame sin curve over ~0.8s).
-    /// Subtle vertical "nod" when the pet enters `.happy` — small enough to
-    /// register as acknowledgment rather than a jump. Amplitude is 3% of the
-    /// pet height (was 8%) and total duration is 0.6 s (was 0.8 s) so it
-    /// settles back before the completion sound finishes.
-    func happyHopOffset(now: CFTimeInterval) -> CGFloat {
-        guard spriteState == .happy, hopEndTime > now else { return 0 }
-        let total: CFTimeInterval = 0.6
-        let remaining = hopEndTime - now
-        let t = max(0, min(1, 1 - remaining / total))
-        let amp: CGFloat = displayHeight * 0.03
-        return amp * CGFloat(sin(t * .pi))
-    }
+    /// Returns 0 unconditionally — pets no longer move on the Y axis when
+    /// entering `.happy`. The "jump" reads through the sprite frames, not
+    /// through window translation. Kept as a function so existing call
+    /// sites compile without churn.
+    func happyHopOffset(now: CFTimeInterval) -> CGFloat { 0 }
 
     // MARK: - Frame Update (dock placement; PlacementMode.dock uses this)
 
