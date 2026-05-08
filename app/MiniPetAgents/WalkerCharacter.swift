@@ -823,22 +823,41 @@ class WalkerCharacter {
         let walkAmount = currentTravelDistance > 0 ? walkPixels / currentTravelDistance : 0.3
 
         if placement == .dock {
-            // Always travel left → right along the dock; wrap near the right edge.
-            goingRight = true
-            if positionProgress > 0.88 {
-                positionProgress = CGFloat.random(in: 0.02...0.12)
-                walkStartPos = positionProgress
+            // Ping-pong along the dock: right → left → right. Direction is
+            // determined by current position when at an edge, otherwise we
+            // continue whatever direction we were last going.
+            if positionProgress > 0.92 {
+                goingRight = false
+            } else if positionProgress < 0.08 {
+                goingRight = true
             }
-            walkEndPos = min(walkStartPos + walkAmount, 1.0)
-            if walkEndPos <= walkStartPos + 0.001 {
-                walkEndPos = min(1.0, walkStartPos + max(0.05, walkAmount))
+            // (else: keep the previous `goingRight`)
+
+            if goingRight {
+                walkEndPos = min(walkStartPos + walkAmount, 0.98)
+                if walkEndPos <= walkStartPos + 0.001 {
+                    // Already at right edge; bounce immediately.
+                    goingRight = false
+                    walkEndPos = max(walkStartPos - walkAmount, 0.02)
+                }
+            } else {
+                walkEndPos = max(walkStartPos - walkAmount, 0.02)
+                if walkEndPos >= walkStartPos - 0.001 {
+                    goingRight = true
+                    walkEndPos = min(walkStartPos + walkAmount, 0.98)
+                }
             }
+
             let minSeparation: CGFloat = 0.12
             if let siblings = controller?.characters {
                 for sibling in siblings where sibling !== self {
                     let sibPos = sibling.positionProgress
-                    if walkEndPos > walkStartPos, abs(walkEndPos - sibPos) < minSeparation {
-                        walkEndPos = min(walkEndPos, max(walkStartPos, sibPos - minSeparation))
+                    if abs(walkEndPos - sibPos) < minSeparation {
+                        if goingRight {
+                            walkEndPos = max(walkStartPos, sibPos - minSeparation)
+                        } else {
+                            walkEndPos = min(walkStartPos, sibPos + minSeparation)
+                        }
                     }
                 }
             }
@@ -887,13 +906,29 @@ class WalkerCharacter {
     func enterPause() {
         isWalking = false
         isPaused = true
-        // Only revert to .idle when the planner is actually in charge — leave
-        // session-driven states alone.
+
+        let now = CACurrentMediaTime()
+        // On the dock, when we arrive at either edge, throw in a flourish
+        // before the next leg: a happy hop most of the time, occasionally a
+        // longer "stretch and look around" idle, and rarely kick into a run
+        // for the return trip (handled on the next startWalk via the planner).
+        let atDockEdge = placement == .dock && (positionProgress >= 0.96 || positionProgress <= 0.04)
+
         if spriteState == .walk || spriteState == .run {
+            if atDockEdge, Double.random(in: 0...1) < 0.7 {
+                // Happy hop at the bounce point.
+                setSpriteState(.happy, source: .planner)
+                pauseEndTime = now + Double.random(in: 1.0...1.6)
+                return
+            }
             setSpriteState(.idle, source: .planner)
         }
-        let delay = Double.random(in: 5.0...12.0)
-        pauseEndTime = CACurrentMediaTime() + delay
+
+        // Shorter pauses on the dock so the pet keeps pacing.
+        let delay = placement == .dock
+            ? Double.random(in: 1.0...3.5)
+            : Double.random(in: 5.0...12.0)
+        pauseEndTime = now + delay
     }
 
     func updateFlip() {
