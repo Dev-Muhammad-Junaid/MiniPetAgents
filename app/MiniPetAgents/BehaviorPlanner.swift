@@ -45,10 +45,12 @@ final class BehaviorPlanner {
         // Apply walk-speed multiplier every tick (cheap; keeps live menu changes responsive).
         pet.walkSpeedMultiplier = PetLibrary.resolvedWalkSpeed(for: pet.petSlug).multiplier
 
-        // After the quiet window, sweep transient session states back to .idle so
-        // the pet can resume its normal mood loop. This prevents a sticky `.failed`
-        // or `.jumping` from freezing motion forever.
+        // After the quiet window, sweep transient session states back to
+        // .idle so the pet can resume its normal mood loop — UNLESS a
+        // completion bubble is still up, in which case `.jumping` should
+        // persist until the user dismisses the bubble.
         if (pet.spriteState == .jumping || pet.spriteState == .failed),
+           !pet.showingCompletion,
            now - pet.lastSessionEventTime > Self.quietWindow {
             pet.setSpriteState(.idle, source: .planner)
         }

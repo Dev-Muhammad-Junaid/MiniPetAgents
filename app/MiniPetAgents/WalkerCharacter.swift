@@ -12,6 +12,14 @@ final class PopoverWindowDelegate: NSObject, NSWindowDelegate {
     }
 }
 
+/// Backing view for the thinking / completion bubble. Routes mouseDown
+/// to `onClick` (used by the completion bubble for click-to-dismiss).
+final class ClickableBubbleView: NSView {
+    var onClick: (() -> Void)?
+    override func mouseDown(with event: NSEvent) { onClick?() }
+    override func resetCursorRects() { addCursorRect(bounds, cursor: .pointingHand) }
+}
+
 /// Yellow "—" minimize chip in the chat title bar — visually mirrors the
 /// macOS traffic-light minimize button.
 final class MinimizeChip: NSView {
@@ -492,7 +500,10 @@ class WalkerCharacter {
         isIdleForPopover = true
         isWalking = false
         isPaused = true
-        setSpriteState(.waving, source: .ui)
+        // While the chat is open the pet plays `.review` (examining the
+        // conversation). It used to play `.waving`, which now belongs to
+        // hover.
+        setSpriteState(.review, source: .ui)
 
         showingCompletion = false
         hideBubble()
@@ -663,15 +674,18 @@ class WalkerCharacter {
         session.onText = { [weak self] text in
             self?.currentStreamingText += text
             self?.terminalView?.appendStreamingText(text)
-            self?.setSpriteState(.waving, source: .session)
+            // Chat is open — pet is in `.review`. Streaming doesn't change
+            // state. (Used to flip to `.waving`, which now belongs to hover.)
+            self?.setSpriteState(.review, source: .session)
         }
         session.onTurnComplete = { [weak self] in
             self?.terminalView?.endStreaming()
             self?.playCompletionSound()
             self?.showCompletionBubble()
+            // Pet plays `.jumping` and *stays* there until the user clicks
+            // the completion bubble. The planner is gated on
+            // `showingCompletion` so it won't sweep this back to .idle.
             self?.setSpriteState(.jumping, source: .session)
-            // Notify placement strategies (e.g. notch/edgeSlide) so they can
-            // briefly reveal the pet on completion.
             self?.controller?.notifyTurnComplete(self)
         }
         session.onError = { [weak self] text in
@@ -746,13 +760,8 @@ class WalkerCharacter {
         let now = CACurrentMediaTime()
 
         if showingCompletion {
-            if now >= completionBubbleExpiry {
-                showingCompletion = false
-                hideBubble()
-                return
-            }
+            // Persistent until the user clicks the bubble — no expiry.
             if isIdleForPopover {
-                completionBubbleExpiry += 1.0 / 60.0
                 hideBubble()
             } else {
                 showBubble(text: currentPhrase, isCompletion: true)
@@ -779,6 +788,10 @@ class WalkerCharacter {
     func showBubble(text: String, isCompletion: Bool) {
         let t = resolvedTheme
         if thinkingBubbleWindow == nil { createThinkingBubble() }
+        // Completion bubbles intercept clicks so the user can dismiss them.
+        // Thinking bubbles stay click-through so the user can still click
+        // the pet underneath.
+        thinkingBubbleWindow?.ignoresMouseEvents = !isCompletion
 
         let h = Self.bubbleH
         let padding: CGFloat = 16
@@ -830,9 +843,25 @@ class WalkerCharacter {
     func showCompletionBubble() {
         currentPhrase = Self.completionPhrases.randomElement() ?? "done!"
         showingCompletion = true
-        completionBubbleExpiry = CACurrentMediaTime() + 3.0
+        // Effectively "no expiry" — the bubble stays up until the user
+        // clicks it (see `dismissCompletionBubble`). Kept positive so any
+        // stray comparison still treats us as not-expired.
+        completionBubbleExpiry = .greatestFiniteMagnitude
         lastPhraseUpdate = 0
         if !isIdleForPopover { showBubble(text: currentPhrase, isCompletion: true) }
+    }
+
+    /// Called when the user clicks the completion bubble. Hides the bubble
+    /// and lets the planner sweep the pet back to `.idle` on its next tick.
+    func dismissCompletionBubble() {
+        guard showingCompletion else { return }
+        showingCompletion = false
+        completionBubbleExpiry = 0
+        hideBubble()
+        // Stamp the session-event time so the planner's quiet window now
+        // applies from this moment, then it's free to sweep `.jumping` back
+        // to `.idle` after `quietWindow` seconds.
+        lastSessionEventTime = CACurrentMediaTime()
     }
 
     private func createThinkingBubble() {
@@ -847,10 +876,14 @@ class WalkerCharacter {
         win.backgroundColor = .clear
         win.hasShadow = true
         win.level = NSWindow.Level(rawValue: NSWindow.Level.statusBar.rawValue + 5)
+        // Click handling is managed per-show: ignoresMouseEvents flips to
+        // false in showBubble(isCompletion: true) so the user can dismiss
+        // the completion bubble; thinking bubbles stay click-through.
         win.ignoresMouseEvents = true
         win.collectionBehavior = [.canJoinAllSpaces, .stationary]
 
-        let container = NSView(frame: NSRect(x: 0, y: 0, width: w, height: h))
+        let container = ClickableBubbleView(frame: NSRect(x: 0, y: 0, width: w, height: h))
+        container.onClick = { [weak self] in self?.dismissCompletionBubble() }
         container.wantsLayer = true
         container.layer?.backgroundColor = t.bubbleBg.cgColor
         container.layer?.cornerRadius = t.bubbleCornerRadius
@@ -949,19 +982,8 @@ class WalkerCharacter {
                 }
             }
 
-            let minSeparation: CGFloat = 0.12
-            if let siblings = controller?.characters {
-                for sibling in siblings where sibling !== self {
-                    let sibPos = sibling.positionProgress
-                    if abs(walkEndPos - sibPos) < minSeparation {
-                        if goingRight {
-                            walkEndPos = max(walkStartPos, sibPos - minSeparation)
-                        } else {
-                            walkEndPos = min(walkStartPos, sibPos + minSeparation)
-                        }
-                    }
-                }
-            }
+            // No sibling separation — pets walk through each other on the
+            // dock without changing direction.
         } else if placement == .freeRoam {
             let curX = window.frame.midX
             let tx = roamTargetX ?? (curX + 1)
@@ -1059,27 +1081,8 @@ class WalkerCharacter {
 
     // MARK: - Hover wave (sprite-state cycle, no Y movement)
 
-    /// Three-phase hover cycle: WAVE (rotation wiggle on the idle sprite) →
-    /// JUMP (`.jumping` sprite frames, no rotation) → IDLE (rest), repeat.
-    /// All phases hold the pet's window position constant — there is no
-    /// Y translation in any phase.
-    enum HoverPhase { case wave, jump, idle }
-    private static let hoverWaveDuration:  CFTimeInterval = 0.6
-    private static let hoverJumpDuration:  CFTimeInterval = 0.7
-    private static let hoverIdleDuration:  CFTimeInterval = 0.4
-    private var hoverCyclePeriod: CFTimeInterval {
-        Self.hoverWaveDuration + Self.hoverJumpDuration + Self.hoverIdleDuration
-    }
-    fileprivate func hoverPhase(at now: CFTimeInterval) -> HoverPhase {
-        let phase = (now - hoverStartTime).truncatingRemainder(dividingBy: hoverCyclePeriod)
-        if phase < Self.hoverWaveDuration { return .wave }
-        if phase < Self.hoverWaveDuration + Self.hoverJumpDuration { return .jump }
-        return .idle
-    }
-
     func beginHover() {
-        // No-op while the chat popover is open — hover should have no
-        // effect during a conversation.
+        // Hover has no effect while the chat is open.
         guard !isHovering, !isIdleForPopover else { return }
         isHovering = true
         hoverStartTime = CACurrentMediaTime()
@@ -1088,28 +1091,17 @@ class WalkerCharacter {
     func endHover() {
         guard isHovering else { return }
         isHovering = false
-        // Drop back to idle so the next planner tick can resume normal mood.
-        if spriteState == .jumping { setSpriteState(.idle, source: .ui) }
-        applySpriteTransform()
+        if spriteState == .waving { setSpriteState(.idle, source: .ui) }
     }
 
-    /// Called from the controller's per-tick loop. Cycles the sprite state
-    /// between `.jumping` and `.idle` while hovering. Freezes the walk clock
-    /// so the pet doesn't drift across the dock while waving.
+    /// Called from the controller's per-tick loop. Holds the pet at
+    /// `.waving` while the cursor is over it and freezes its walk clock
+    /// so it doesn't drift. Loops the `.waving` sprite frames at the FPS
+    /// declared by the pack — no synthetic transforms.
     func tickHover(now: CFTimeInterval) {
-        // Defensive: chat opened while hovering — bail and revert.
-        if isHovering, isIdleForPopover {
-            endHover()
-            return
-        }
+        if isHovering, isIdleForPopover { endHover(); return }
         guard isHovering else { return }
-
-        let phase = hoverPhase(at: now)
-        let target: PetState = phase == .jump ? .jumping : .idle
-        if spriteState != target {
-            setSpriteState(target, source: .ui)
-        }
-        // Hover freezes motion so the pet stays in place while waving.
+        if spriteState != .waving { setSpriteState(.waving, source: .ui) }
         freezeWalkClock(at: now)
     }
 

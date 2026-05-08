@@ -286,46 +286,12 @@ final class PetAgentsController {
         // and we don't need each placement strategy to remember to call it.
         for char in activeChars { char.applySpriteTransform(now: now) }
 
-        // Greet on collision: any two dock-walking pets within 0.06 of each
-        // other in positionProgress trigger a brief .jumping + reverse for
-        // both, with a 4 s cooldown to avoid retriggering during the same
-        // close-pass.
-        runGreetOnCollision(activeChars: activeChars, now: now)
+        // (Pets pass through each other on the dock — no greet-on-collision,
+        //  no sibling separation.)
 
         let sorted = activeChars.sorted { $0.positionProgress < $1.positionProgress }
         for (i, char) in sorted.enumerated() {
             char.window.level = NSWindow.Level(rawValue: NSWindow.Level.statusBar.rawValue + i)
-        }
-    }
-
-    /// When two dock-walking pets get close on the dock, both do a brief
-    /// `.jumping` greet + reverse direction. Cooldown prevents retriggers
-    /// during a single near-pass.
-    private func runGreetOnCollision(activeChars: [WalkerCharacter], now: CFTimeInterval) {
-        let dockPets = activeChars.filter { $0.placement == .dock && $0.isWalking }
-        guard dockPets.count >= 2 else { return }
-        let cooldown: CFTimeInterval = 4.0
-        let nearThreshold: CGFloat = 0.06
-
-        for i in 0..<dockPets.count {
-            for j in (i + 1)..<dockPets.count {
-                let a = dockPets[i], b = dockPets[j]
-                guard abs(a.positionProgress - b.positionProgress) < nearThreshold,
-                      now - a.lastGreetTime > cooldown,
-                      now - b.lastGreetTime > cooldown,
-                      // Only greet if they're walking toward each other.
-                      a.goingRight != b.goingRight else { continue }
-
-                a.lastGreetTime = now
-                b.lastGreetTime = now
-                a.setSpriteState(.jumping, source: .planner)
-                b.setSpriteState(.jumping, source: .planner)
-                // Reverse direction so they part ways gracefully.
-                a.goingRight.toggle()
-                b.goingRight.toggle()
-                a.enterPause()
-                b.enterPause()
-            }
         }
     }
 
