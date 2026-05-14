@@ -18,7 +18,7 @@ class ClaudeSession: AgentSession {
     var onTurnComplete: (() -> Void)?
     var onProcessExit: (() -> Void)?
 
-    var history: [AgentMessage] = []
+    var history: [AgentMessage] = []   // satisfies { get set } protocol requirement
 
     // MARK: - Process Lifecycle
 
@@ -35,10 +35,11 @@ class ClaudeSession: AgentSession {
             "/usr/local/bin/claude",
             "/opt/homebrew/bin/claude"
         ]) { [weak self] path in
-            guard let self = self, let binaryPath = path else {
+            guard let self = self else { return }
+            guard let binaryPath = path else {
                 let msg = "Claude CLI not found.\n\n\(AgentProvider.claude.installInstructions)"
-                self?.onError?(msg)
-                self?.history.append(AgentMessage(role: .error, text: msg))
+                self.onError?(msg)
+                self.history.append(AgentMessage(role: .error, text: msg))
                 return
             }
             Self.binaryPath = binaryPath
@@ -89,7 +90,13 @@ class ClaudeSession: AgentSession {
             guard !data.isEmpty else { return }
             if let text = String(data: data, encoding: .utf8) {
                 DispatchQueue.main.async {
-                    self?.onError?(text)
+                    let lower = text.lowercased()
+                    if lower.contains("not logged in") || lower.contains("please run /login") || lower.contains("unauthenticated") {
+                        let msg = "Not logged in to Claude.\n\nOpen Terminal and run:\n  claude\n\nComplete the login prompt, then come back and chat here."
+                        self?.onError?(msg)
+                    } else {
+                        self?.onError?(text)
+                    }
                 }
             }
         }
@@ -109,21 +116,44 @@ class ClaudeSession: AgentSession {
     }
 
     func send(message: String) {
+        send(message: message, attachments: [])
+    }
+
+    func send(message: String, attachments: [ChatAttachment]) {
         guard isRunning, let pipe = inputPipe else { return }
         isBusy = true
         history.append(AgentMessage(role: .user, text: message))
 
+        // Build content: plain string for text-only, content-block array when attachments present.
+        let content: Any
+        if attachments.isEmpty {
+            content = message
+        } else {
+            var blocks: [[String: Any]] = []
+            for att in attachments {
+                switch att.kind {
+                case .image(_, let png, let mediaType):
+                    blocks.append([
+                        "type": "image",
+                        "source": ["type": "base64", "media_type": mediaType,
+                                   "data": png.base64EncodedString()]
+                    ])
+                case .text(let fileContent):
+                    blocks.append(["type": "text", "text": "[\(att.filename)]\n\(fileContent)"])
+                }
+            }
+            blocks.append(["type": "text", "text": message])
+            content = blocks
+        }
+
         let payload: [String: Any] = [
             "type": "user",
-            "message": [
-                "role": "user",
-                "content": message
-            ]
+            "message": ["role": "user", "content": content]
         ]
         guard let data = try? JSONSerialization.data(withJSONObject: payload),
-              let jsonStr = String(data: data, encoding: .utf8) else { return }
-        let line = jsonStr + "\n"
-        pipe.fileHandleForWriting.write(line.data(using: .utf8)!)
+              let jsonStr = String(data: data, encoding: .utf8),
+              let lineData = (jsonStr + "\n").data(using: .utf8) else { return }
+        pipe.fileHandleForWriting.write(lineData)
     }
 
     func terminate() {
@@ -206,7 +236,14 @@ class ClaudeSession: AgentSession {
         case "result":
             isBusy = false
             if let result = json["result"] as? String, !result.isEmpty {
-                history.append(AgentMessage(role: .assistant, text: result))
+                let lower = result.lowercased()
+                if lower.contains("not logged in") || lower.contains("please run /login") || lower.contains("unauthenticated") {
+                    let msg = "Not logged in to Claude.\n\nOpen Terminal and run:\n  claude\n\nComplete the login prompt, then come back and chat here."
+                    history.append(AgentMessage(role: .error, text: msg))
+                    onError?(msg)
+                } else {
+                    history.append(AgentMessage(role: .assistant, text: result))
+                }
             }
             onTurnComplete?()
 

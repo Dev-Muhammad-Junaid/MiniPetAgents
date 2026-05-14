@@ -4,9 +4,19 @@ import AppKit
 /// Wraps `npx petdex install/list` so the in-app gallery can install pets
 /// without making the user pop out to a terminal.
 final class PetInstaller {
-    enum InstallerError: Error {
+    enum InstallerError: LocalizedError {
         case missingNpx
         case nonZeroExit(code: Int32, output: String)
+
+        var errorDescription: String? {
+            switch self {
+            case .missingNpx:
+                return "npx not found — install Node.js from https://nodejs.org and try again"
+            case .nonZeroExit(let code, let output):
+                let tail = output.split(separator: "\n").suffix(3).joined(separator: "\n")
+                return "petdex exited with code \(code)\(tail.isEmpty ? "" : ": \(tail)")"
+            }
+        }
     }
 
     /// Stream of stdout/stderr lines, plus a terminal result, for an install.
@@ -65,7 +75,9 @@ final class PetInstaller {
             }
             let proc = Process()
             proc.executableURL = URL(fileURLWithPath: npxPath)
-            proc.arguments = ["petdex"] + args
+            // --yes auto-approves "Need to install petdex? (y)" so the gallery
+            // install flow doesn't stall waiting for stdin input.
+            proc.arguments = ["--yes", "petdex"] + args
             proc.environment = ShellEnvironment.processEnvironment()
 
             let stdout = Pipe()

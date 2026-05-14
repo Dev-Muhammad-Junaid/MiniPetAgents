@@ -289,6 +289,10 @@ class WalkerCharacter {
         self.petPack = petPack
     }
 
+    deinit {
+        removeEventMonitors()
+    }
+
     // MARK: - Setup
 
     func setup() {
@@ -321,7 +325,7 @@ class WalkerCharacter {
             spriteLayer.contents = placeholder
         }
 
-        let screen = NSScreen.main!
+        guard let screen = NSScreen.main else { return }
         let dockTopY = screen.visibleFrame.origin.y
         let bottomPadding = displayHeight * 0.15
         let y = dockTopY - bottomPadding + yOffset
@@ -394,7 +398,7 @@ class WalkerCharacter {
         let now = CACurrentMediaTime()
         dragSamples.append((now, NSEvent.mouseLocation))
         let cutoff = now - 0.12
-        while dragSamples.count > 2, let first = dragSamples.first, first.t < cutoff {
+        while dragSamples.count > 1, let first = dragSamples.first, first.t < cutoff {
             dragSamples.removeFirst()
         }
     }
@@ -465,7 +469,7 @@ class WalkerCharacter {
 
         // Exponential air drag on both axes. No gravity — the throw is the
         // only force; the pet glides until friction kills it.
-        let dragMul = pow(1.0 - min(Self.ballisticAirDrag * dt, 0.95), 1)
+        let dragMul = exp(-Self.ballisticAirDrag * dt)
         ballisticVx *= dragMul
         ballisticVy *= dragMul
 
@@ -477,7 +481,7 @@ class WalkerCharacter {
         let minX = bounds.minX
         let maxX = bounds.maxX - displayWidth
         let minY = bounds.minY
-        let maxY = bounds.maxY - displayWidth   // sprite is square
+        let maxY = bounds.maxY - displayHeight
 
         // All four walls bounce identically. No floor-vs-wall distinction —
         // the pet can stop and float anywhere, dock or no dock.
@@ -637,11 +641,10 @@ class WalkerCharacter {
     }
 
     func openPopover() {
-        if let siblings = controller?.characters {
-            for sibling in siblings where sibling !== self && sibling.isIdleForPopover {
-                sibling.closePopover()
-            }
-        }
+        // Stop any in-flight throw so the pet doesn't keep bouncing behind the chat window.
+        isBallistic = false
+        ballisticVx = 0
+        ballisticVy = 0
 
         isIdleForPopover = true
         isWalking = false
@@ -656,6 +659,9 @@ class WalkerCharacter {
 
         if session == nil {
             let newSession = resolvedProvider.createSession()
+            // Restore persisted conversation history before starting.
+            let saved = HistoryStore.load(key: historyKey())
+            if !saved.isEmpty { newSession.history = saved }
             session = newSession
             wireSession(newSession, providerName: resolvedProvider.displayName)
             newSession.start()
@@ -676,15 +682,6 @@ class WalkerCharacter {
         }
 
         removeEventMonitors()
-
-        clickOutsideMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
-            guard let self = self, let popover = self.popoverWindow else { return }
-            let popoverFrame = popover.frame
-            let charFrame = self.window.frame
-            if !popoverFrame.contains(NSEvent.mouseLocation) && !charFrame.contains(NSEvent.mouseLocation) {
-                self.closePopover()
-            }
-        }
 
         escapeKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             if event.keyCode == 53 { self?.closePopover(); return nil }
@@ -768,11 +765,27 @@ class WalkerCharacter {
         chip.onClick = { [weak self] in self?.minimizeChatWindow() }
         titleBar.addSubview(chip)
 
-        let titleString = "\(petSlug.isEmpty ? "pet" : petSlug) · \(t.titleString)"
+        // Provider logo — uses asset catalog image, falls back to SF Symbol.
+        let provider = resolvedProvider
+        let iconSize: CGFloat = 16
+        let iconY = (titleBarHeight - iconSize) / 2
+        let iconView = NSImageView(frame: NSRect(x: 28, y: iconY, width: iconSize, height: iconSize))
+        if let logo = NSImage(named: provider.logoImageName) {
+            iconView.image = logo
+            iconView.imageScaling = .scaleProportionallyUpOrDown
+        } else if let symbol = NSImage(systemSymbolName: provider.symbolName,
+                                       accessibilityDescription: provider.displayName) {
+            iconView.image = symbol.withSymbolConfiguration(
+                NSImage.SymbolConfiguration(pointSize: 10, weight: .semibold))
+            iconView.contentTintColor = provider.brandColor
+        }
+        titleBar.addSubview(iconView)
+
+        let titleString = "\(petSlug.isEmpty ? "pet" : petSlug) · \(t.titleString(for: provider))"
         let titleLabel = NSTextField(labelWithString: titleString)
         titleLabel.font = t.titleFont
         titleLabel.textColor = t.titleText
-        titleLabel.frame = NSRect(x: 32, y: 6, width: popoverWidth - 44, height: 16)
+        titleLabel.frame = NSRect(x: 50, y: 6, width: popoverWidth - 62, height: 16)
         titleLabel.autoresizingMask = [.width]
         titleBar.addSubview(titleLabel)
 
@@ -788,9 +801,10 @@ class WalkerCharacter {
                                                   height: popoverHeight - titleBarHeight - 1))
         terminal.characterColor = characterColor
         terminal.themeOverride = themeOverride
+        terminal.provider = provider
         terminal.autoresizingMask = [.width, .height]
-        terminal.onSendMessage = { [weak self] message in
-            self?.session?.send(message: message)
+        terminal.onSendMessage = { [weak self] message, attachments in
+            self?.session?.send(message: message, attachments: attachments)
         }
         container.addSubview(terminal)
 
@@ -816,6 +830,11 @@ class WalkerCharacter {
         closePopover()
     }
 
+    private func historyKey() -> String {
+        let slug = petSlug.isEmpty ? "unknown" : petSlug
+        return "\(slug)-\(resolvedProvider.rawValue)"
+    }
+
     private func wireSession(_ session: any AgentSession, providerName: String) {
         session.onText = { [weak self] text in
             self?.currentStreamingText += text
@@ -833,6 +852,10 @@ class WalkerCharacter {
             // `showingCompletion` so it won't sweep this back to .idle.
             self?.setSpriteState(.jumping, source: .session)
             self?.controller?.notifyTurnComplete(self)
+            // Persist conversation history after every completed turn.
+            if let self, let session = self.session {
+                HistoryStore.save(key: self.historyKey(), messages: session.history)
+            }
         }
         session.onError = { [weak self] text in
             self?.terminalView?.appendError(text)
@@ -877,7 +900,10 @@ class WalkerCharacter {
         x = max(screenFrame.minX + 4, min(x, screenFrame.maxX - popoverSize.width - 4))
         let clampedY = min(y, screenFrame.maxY - popoverSize.height - 4)
 
-        popover.setFrameOrigin(NSPoint(x: x, y: clampedY))
+        let newOrigin = NSPoint(x: x, y: clampedY)
+        let cur = popover.frame.origin
+        guard abs(newOrigin.x - cur.x) > 2 || abs(newOrigin.y - cur.y) > 2 else { return }
+        popover.setFrameOrigin(newOrigin)
     }
 
     // MARK: - Thinking Bubble
@@ -1295,12 +1321,13 @@ class WalkerCharacter {
     // MARK: - Frame Update (dock placement; PlacementMode.dock uses this)
 
     func update(dockX: CGFloat, dockWidth: CGFloat, dockTopY: CGFloat) {
-        currentTravelDistance = max(dockWidth - displayWidth, 0)
+        let height = displayHeight
+        let width = displayWidth
+        currentTravelDistance = max(dockWidth - width, 0)
         if isIdleForPopover {
             let travelDistance = currentTravelDistance
             let x = dockX + travelDistance * positionProgress + currentFlipCompensation
-            let bottomPadding = displayHeight * 0.15
-            let y = dockTopY - bottomPadding + yOffset
+            let y = dockTopY - height * 0.15 + yOffset
             window.setFrameOrigin(NSPoint(x: x, y: y))
             updatePopoverPosition()
             updateThinkingBubble()
@@ -1313,10 +1340,8 @@ class WalkerCharacter {
             if now >= pauseEndTime {
                 startWalk()
             } else {
-                let travelDistance = max(dockWidth - displayWidth, 0)
-                let x = dockX + travelDistance * positionProgress + currentFlipCompensation
-                let bottomPadding = displayHeight * 0.15
-                let y = dockTopY - bottomPadding + yOffset
+                let x = dockX + currentTravelDistance * positionProgress + currentFlipCompensation
+                let y = dockTopY - height * 0.15 + yOffset
                 window.setFrameOrigin(NSPoint(x: x, y: y))
                 return
             }
@@ -1337,10 +1362,8 @@ class WalkerCharacter {
 
             if isHolding {
                 freezeWalkClock(at: now)
-                let travelDistance = currentTravelDistance
-                let x = dockX + travelDistance * positionProgress + currentFlipCompensation
-                let bottomPadding = displayHeight * 0.15
-                let y = dockTopY - bottomPadding + yOffset
+                let x = dockX + currentTravelDistance * positionProgress + currentFlipCompensation
+                let y = dockTopY - height * 0.15 + yOffset
                 window.setFrameOrigin(NSPoint(x: x, y: y))
                 updateThinkingBubble()
                 return
@@ -1364,8 +1387,7 @@ class WalkerCharacter {
             }
 
             let x = dockX + travelDistance * positionProgress + currentFlipCompensation
-            let bottomPadding = displayHeight * 0.15
-            let y = dockTopY - bottomPadding + yOffset
+            let y = dockTopY - height * 0.15 + yOffset
             window.setFrameOrigin(NSPoint(x: x, y: y))
         }
 

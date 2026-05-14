@@ -1,9 +1,10 @@
 import Foundation
+import AppKit
 
 // MARK: - Provider
 
 enum AgentProvider: String, CaseIterable {
-    case claude, codex, copilot
+    case claude, codex, copilot, cursor, gemini
 
     private static let defaultsKey = "selectedProvider"
 
@@ -22,11 +23,46 @@ enum AgentProvider: String, CaseIterable {
         case .claude:  return "Claude"
         case .codex:   return "Codex"
         case .copilot: return "Copilot"
+        case .cursor:  return "Cursor"
+        case .gemini:  return "Gemini"
         }
     }
 
     var inputPlaceholder: String {
         "Ask \(displayName)..."
+    }
+
+    /// Brand accent color shown in the chat title bar icon badge.
+    var brandColor: NSColor {
+        switch self {
+        case .claude:  return NSColor(red: 0.79, green: 0.38, blue: 0.26, alpha: 1.0)  // Anthropic terracotta
+        case .codex:   return NSColor(red: 0.42, green: 0.41, blue: 0.95, alpha: 1.0)  // Codex purple-blue
+        case .copilot: return NSColor(red: 0.0,  green: 0.47, blue: 0.84, alpha: 1.0)  // Microsoft Copilot blue
+        case .cursor:  return NSColor(red: 0.20, green: 0.46, blue: 0.99, alpha: 1.0)  // Cursor blue
+        case .gemini:  return NSColor(red: 0.55, green: 0.56, blue: 0.60, alpha: 1.0)  // Gemini gem silver
+        }
+    }
+
+    /// Asset catalog image name for the provider logo shown in the chat title bar.
+    var logoImageName: String {
+        switch self {
+        case .claude:  return "logo-claude"
+        case .codex:   return "logo-codex"
+        case .copilot: return "logo-copilot"
+        case .cursor:  return "logo-cursor"
+        case .gemini:  return "logo-gemini"
+        }
+    }
+
+    /// SF Symbol fallback if the logo asset is missing.
+    var symbolName: String {
+        switch self {
+        case .claude:  return "sparkle"
+        case .codex:   return "terminal"
+        case .copilot: return "infinity"
+        case .cursor:  return "play.fill"
+        case .gemini:  return "cube.fill"
+        }
     }
 
     /// Returns provider name styled per theme format.
@@ -45,7 +81,11 @@ enum AgentProvider: String, CaseIterable {
         case .codex:
             return "To install, run this in Terminal:\n  npm install -g @openai/codex"
         case .copilot:
-            return "To install, run this in Terminal:\n  brew install copilot-cli\n\nOr: npm install -g @github/copilot-cli"
+            return "To install, run this in Terminal:\n  npm install -g @github/copilot"
+        case .cursor:
+            return "To install Cursor Agent, run this in Terminal:\n  curl https://cursor.com/install -fsS | bash\n\nThen add ~/.local/bin to your PATH if prompted."
+        case .gemini:
+            return "To install, run this in Terminal:\n  npm install -g @google/gemini-cli"
         }
     }
 
@@ -54,6 +94,8 @@ enum AgentProvider: String, CaseIterable {
         case .claude:  return ClaudeSession()
         case .codex:   return CodexSession()
         case .copilot: return CopilotSession()
+        case .cursor:  return CursorSession()
+        case .gemini:  return GeminiSession()
         }
     }
 }
@@ -68,8 +110,8 @@ enum TitleFormat {
 
 // MARK: - Message
 
-struct AgentMessage {
-    enum Role { case user, assistant, error, toolUse, toolResult }
+struct AgentMessage: Codable {
+    enum Role: String, Codable { case user, assistant, error, toolUse, toolResult }
     let role: Role
     let text: String
 }
@@ -79,7 +121,7 @@ struct AgentMessage {
 protocol AgentSession: AnyObject {
     var isRunning: Bool { get }
     var isBusy: Bool { get }
-    var history: [AgentMessage] { get }
+    var history: [AgentMessage] { get set }
 
     var onText: ((String) -> Void)? { get set }
     var onError: ((String) -> Void)? { get set }
@@ -91,5 +133,23 @@ protocol AgentSession: AnyObject {
 
     func start()
     func send(message: String)
+    func send(message: String, attachments: [ChatAttachment])
     func terminate()
+}
+
+// MARK: - Default attachment handling
+
+extension AgentSession {
+    /// Non-Claude sessions: prepend text file contents into the message; note images by filename.
+    func send(message: String, attachments: [ChatAttachment]) {
+        guard !attachments.isEmpty else { send(message: message); return }
+        var prefix = ""
+        for att in attachments {
+            switch att.kind {
+            case .text(let content): prefix += "[\(att.filename)]\n\(content)\n\n"
+            case .image:             prefix += "[Image: \(att.filename)]\n"
+            }
+        }
+        send(message: prefix + message)
+    }
 }

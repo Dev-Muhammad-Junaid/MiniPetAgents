@@ -21,6 +21,10 @@
 		A10000010000000000000032 /* ShellEnvironment.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000020000000000000031 /* ShellEnvironment.swift */; };
 		A10000010000000000000033 /* CodexSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000020000000000000032 /* CodexSession.swift */; };
 		A10000010000000000000034 /* CopilotSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000020000000000000033 /* CopilotSession.swift */; };
+		A10000010000000000000035 /* CursorSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000020000000000000034 /* CursorSession.swift */; };
+		A10000010000000000000036 /* GeminiSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000020000000000000035 /* GeminiSession.swift */; };
+		A10000010000000000000037 /* HistoryStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000020000000000000036 /* HistoryStore.swift */; };
+		A10000010000000000000038 /* ChatAttachment.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000020000000000000037 /* ChatAttachment.swift */; };
 		A10000010000000000000040 /* PetPack.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000020000000000000040 /* PetPack.swift */; };
 		A10000010000000000000041 /* PetLibrary.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000020000000000000041 /* PetLibrary.swift */; };
 		A10000010000000000000042 /* PetInstaller.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000020000000000000042 /* PetInstaller.swift */; };
@@ -47,6 +51,10 @@
 		A10000020000000000000031 /* ShellEnvironment.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShellEnvironment.swift; sourceTree = "<group>"; };
 		A10000020000000000000032 /* CodexSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodexSession.swift; sourceTree = "<group>"; };
 		A10000020000000000000033 /* CopilotSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CopilotSession.swift; sourceTree = "<group>"; };
+		A10000020000000000000034 /* CursorSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CursorSession.swift; sourceTree = "<group>"; };
+		A10000020000000000000035 /* GeminiSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GeminiSession.swift; sourceTree = "<group>"; };
+		A10000020000000000000036 /* HistoryStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HistoryStore.swift; sourceTree = "<group>"; };
+		A10000020000000000000037 /* ChatAttachment.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatAttachment.swift; sourceTree = "<group>"; };
 		A10000020000000000000040 /* PetPack.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PetPack.swift; sourceTree = "<group>"; };
 		A10000020000000000000041 /* PetLibrary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PetLibrary.swift; sourceTree = "<group>"; };
 		A10000020000000000000042 /* PetInstaller.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PetInstaller.swift; sourceTree = "<group>"; };
@@ -99,6 +107,10 @@
 				A10000020000000000000022 /* ClaudeSession.swift */,
 				A10000020000000000000032 /* CodexSession.swift */,
 				A10000020000000000000033 /* CopilotSession.swift */,
+				A10000020000000000000034 /* CursorSession.swift */,
+				A10000020000000000000035 /* GeminiSession.swift */,
+				A10000020000000000000036 /* HistoryStore.swift */,
+				A10000020000000000000037 /* ChatAttachment.swift */,
 				A10000020000000000000023 /* TerminalView.swift */,
 				A10000020000000000000007 /* Assets.xcassets */,
 				A10000020000000000000010 /* Sounds */,
@@ -210,6 +222,10 @@
 				A10000010000000000000022 /* ClaudeSession.swift in Sources */,
 				A10000010000000000000033 /* CodexSession.swift in Sources */,
 				A10000010000000000000034 /* CopilotSession.swift in Sources */,
+				A10000010000000000000035 /* CursorSession.swift in Sources */,
+				A10000010000000000000036 /* GeminiSession.swift in Sources */,
+				A10000010000000000000037 /* HistoryStore.swift in Sources */,
+				A10000010000000000000038 /* ChatAttachment.swift in Sources */,
 				A10000010000000000000023 /* TerminalView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -330,6 +346,7 @@
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
 				DEAD_CODE_STRIPPING = YES;
+				DEVELOPMENT_TEAM = 57GX8UG734;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = MiniPetAgents/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "Mini Pet Agents";
@@ -357,6 +374,7 @@
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
 				DEAD_CODE_STRIPPING = YES;
+				DEVELOPMENT_TEAM = 57GX8UG734;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = MiniPetAgents/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "Mini Pet Agents";

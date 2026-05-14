@@ -25,9 +25,7 @@ class PaddedTextFieldCell: NSTextFieldCell {
     }
 
     private func configureEditor(_ textObj: NSText) {
-        if let color = textColor {
-            textObj.textColor = color
-        }
+        if let color = textColor { textObj.textColor = color }
         if let tv = textObj as? NSTextView {
             tv.insertionPointColor = textColor ?? .textColor
             tv.drawsBackground = false
@@ -47,27 +45,97 @@ class PaddedTextFieldCell: NSTextFieldCell {
     }
 }
 
-class TerminalView: NSView {
-    let scrollView = NSScrollView()
-    let textView = NSTextView()
-    let inputField = NSTextField()
-    var onSendMessage: ((String) -> Void)?
+// MARK: - Attachment chip button
 
+private class AttachmentChip: NSView {
+    var onRemove: (() -> Void)?
+    private let label = NSTextField(labelWithString: "")
+    private let thumb = NSImageView()
+    private let removeBtn = NSButton()
+
+    init(attachment: ChatAttachment, theme t: PopoverTheme) {
+        super.init(frame: .zero)
+        wantsLayer = true
+        layer?.cornerRadius = 6
+        layer?.backgroundColor = t.inputBg.cgColor
+        layer?.borderWidth = 1
+        layer?.borderColor = t.accentColor.withAlphaComponent(0.4).cgColor
+
+        thumb.frame = NSRect(x: 4, y: 4, width: 16, height: 16)
+        thumb.imageScaling = .scaleProportionallyUpOrDown
+        if let img = attachment.thumbnail {
+            thumb.image = img
+            if !attachment.isImage {
+                thumb.contentTintColor = t.accentColor
+            }
+        }
+        addSubview(thumb)
+
+        label.frame = NSRect(x: 24, y: 5, width: 90, height: 14)
+        label.font = NSFont.systemFont(ofSize: 10)
+        label.textColor = t.textPrimary
+        label.lineBreakMode = .byTruncatingMiddle
+        label.stringValue = attachment.filename
+        addSubview(label)
+
+        removeBtn.frame = NSRect(x: 118, y: 3, width: 18, height: 18)
+        removeBtn.bezelStyle = .inline
+        removeBtn.isBordered = false
+        removeBtn.title = ""
+        if let x = NSImage(systemSymbolName: "xmark.circle.fill", accessibilityDescription: "Remove") {
+            removeBtn.image = x.withSymbolConfiguration(
+                NSImage.SymbolConfiguration(pointSize: 10, weight: .medium))
+        }
+        removeBtn.contentTintColor = t.textDim
+        removeBtn.target = self
+        removeBtn.action = #selector(tappedRemove)
+        addSubview(removeBtn)
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    @objc private func tappedRemove() { onRemove?() }
+}
+
+// MARK: - TerminalView
+
+class TerminalView: NSView {
+    let scrollView    = NSScrollView()
+    let textView      = NSTextView()
+    let inputField    = NSTextField()
+    private let attachStrip = NSView()
+
+    /// Called when the user submits a message, with any pending file/image attachments.
+    var onSendMessage: ((String, [ChatAttachment]) -> Void)?
+
+    private var pendingAttachments: [ChatAttachment] = [] {
+        didSet { rebuildAttachmentStrip(); updateLayout() }
+    }
+    private var isDragHighlighted = false {
+        didSet { layer?.borderColor = isDragHighlighted ? theme.accentColor.cgColor : NSColor.clear.cgColor
+                 layer?.borderWidth = isDragHighlighted ? 2 : 0 }
+    }
     private var currentAssistantText = ""
     private var isStreaming = false
 
     override init(frame: NSRect) {
         super.init(frame: frame)
+        wantsLayer = true
         setupViews()
+        registerForDraggedTypes([.fileURL])
     }
 
     required init?(coder: NSCoder) {
         super.init(coder: coder)
+        wantsLayer = true
         setupViews()
+        registerForDraggedTypes([.fileURL])
     }
 
     var characterColor: NSColor?
     var themeOverride: PopoverTheme?
+    var provider: AgentProvider = .claude { didSet { updatePlaceholder() } }
+
     var theme: PopoverTheme {
         var t = themeOverride ?? PopoverTheme.current
         if let color = characterColor { t = t.withCharacterColor(color) }
@@ -75,73 +143,119 @@ class TerminalView: NSView {
         return t
     }
 
+    // MARK: - Layout
+
+    private let inputHeight: CGFloat = 30
+    private let padding: CGFloat     = 10
+    private let stripHeight: CGFloat = 28
+
+    private func updateLayout() {
+        let hasAttachments = !pendingAttachments.isEmpty
+        let usedStripH = hasAttachments ? stripHeight : 0
+
+        inputField.frame = NSRect(x: padding, y: 6,
+                                  width: frame.width - padding * 2, height: inputHeight)
+
+        attachStrip.isHidden = !hasAttachments
+        attachStrip.frame = NSRect(x: padding, y: inputHeight + 6 + 2,
+                                   width: frame.width - padding * 2, height: usedStripH)
+
+        let scrollY = inputHeight + 6 + 2 + usedStripH + 4
+        scrollView.frame = NSRect(x: padding, y: scrollY,
+                                  width: frame.width - padding * 2,
+                                  height: frame.height - scrollY - padding)
+    }
+
+    override func resizeSubviews(withOldSize oldSize: NSSize) {
+        updateLayout()
+    }
+
     // MARK: - Setup
 
     private func setupViews() {
         let t = theme
-        let inputHeight: CGFloat = 30
-        let padding: CGFloat = 10
 
-        scrollView.frame = NSRect(
-            x: padding, y: inputHeight + padding + 6,
-            width: frame.width - padding * 2,
-            height: frame.height - inputHeight - padding - 10
-        )
-        scrollView.autoresizingMask = [.width, .height]
-        scrollView.hasVerticalScroller = true
-        scrollView.scrollerStyle = .overlay
+        // Scroll / text view
+        scrollView.hasVerticalScroller  = true
+        scrollView.scrollerStyle        = .overlay
         scrollView.hasHorizontalScroller = false
-        scrollView.borderType = .noBorder
-        scrollView.drawsBackground = false
+        scrollView.borderType           = .noBorder
+        scrollView.drawsBackground      = false
 
-        textView.frame = scrollView.contentView.bounds
-        textView.autoresizingMask = [.width]
-        textView.isEditable = false
-        textView.isSelectable = true
+        textView.isEditable      = false
+        textView.isSelectable    = true
         textView.backgroundColor = .clear
-        textView.textColor = t.textPrimary
-        textView.font = t.font
-        textView.isRichText = true
+        textView.textColor       = t.textPrimary
+        textView.font            = t.font
+        textView.isRichText      = true
         textView.textContainerInset = NSSize(width: 2, height: 4)
         let defaultPara = NSMutableParagraphStyle()
         defaultPara.paragraphSpacing = 8
         textView.defaultParagraphStyle = defaultPara
         textView.textContainer?.widthTracksTextView = true
-        textView.isVerticallyResizable = true
+        textView.isVerticallyResizable   = true
         textView.isHorizontallyResizable = false
         textView.isAutomaticLinkDetectionEnabled = false
         textView.linkTextAttributes = [
             .foregroundColor: t.accentColor,
             .underlineStyle: NSUnderlineStyle.single.rawValue
         ]
-
+        textView.autoresizingMask = [.width]
         scrollView.documentView = textView
         addSubview(scrollView)
 
-        inputField.frame = NSRect(
-            x: padding, y: 6,
-            width: frame.width - padding * 2,
-            height: inputHeight
-        )
-        inputField.autoresizingMask = [.width]
+        // Attachment strip (hidden until files are dropped)
+        attachStrip.wantsLayer = true
+        attachStrip.layer?.backgroundColor = NSColor.clear.cgColor
+        attachStrip.isHidden = true
+        addSubview(attachStrip)
+
+        // Input field
         inputField.focusRingType = .none
         let paddedCell = PaddedTextFieldCell(textCell: "")
-        paddedCell.isEditable = true
-        paddedCell.isScrollable = true
-        paddedCell.font = t.font
-        paddedCell.textColor = t.textPrimary
+        paddedCell.isEditable    = true
+        paddedCell.isScrollable  = true
+        paddedCell.font          = t.font
+        paddedCell.textColor     = t.textPrimary
         paddedCell.drawsBackground = false
-        paddedCell.isBezeled = false
+        paddedCell.isBezeled     = false
         paddedCell.fieldBackgroundColor = nil
-        paddedCell.fieldCornerRadius = 0
+        paddedCell.fieldCornerRadius    = 0
         paddedCell.placeholderAttributedString = NSAttributedString(
-            string: AgentProvider.current.inputPlaceholder,
+            string: provider.inputPlaceholder,
             attributes: [.font: t.font, .foregroundColor: t.textDim]
         )
-        inputField.cell = paddedCell
+        inputField.cell   = paddedCell
         inputField.target = self
         inputField.action = #selector(inputSubmitted)
         addSubview(inputField)
+
+        updateLayout()
+    }
+
+    private func updatePlaceholder() {
+        let t = theme
+        (inputField.cell as? PaddedTextFieldCell)?.placeholderAttributedString = NSAttributedString(
+            string: provider.inputPlaceholder,
+            attributes: [.font: t.font, .foregroundColor: t.textDim]
+        )
+    }
+
+    // MARK: - Attachment strip UI
+
+    private func rebuildAttachmentStrip() {
+        attachStrip.subviews.forEach { $0.removeFromSuperview() }
+        let t = theme
+        var x: CGFloat = 0
+        for (i, att) in pendingAttachments.enumerated() {
+            let chip = AttachmentChip(attachment: att, theme: t)
+            chip.frame = NSRect(x: x, y: 2, width: 138, height: 24)
+            chip.onRemove = { [weak self] in
+                self?.pendingAttachments.remove(at: i)
+            }
+            attachStrip.addSubview(chip)
+            x += 142
+        }
     }
 
     // MARK: - Input
@@ -151,10 +265,35 @@ class TerminalView: NSView {
         guard !text.isEmpty else { return }
         inputField.stringValue = ""
 
+        let attachments = pendingAttachments
+        pendingAttachments = []
+
         appendUser(text)
         isStreaming = true
         currentAssistantText = ""
-        onSendMessage?(text)
+        onSendMessage?(text, attachments)
+    }
+
+    // MARK: - Drag & Drop
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        isDragHighlighted = true
+        return .copy
+    }
+
+    override func draggingExited(_ sender: NSDraggingInfo?) {
+        isDragHighlighted = false
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        isDragHighlighted = false
+        guard let urls = sender.draggingPasteboard
+                .readObjects(forClasses: [NSURL.self], options: nil) as? [URL]
+        else { return false }
+        let new = urls.compactMap { ChatAttachment.from(url: $0) }
+        guard !new.isEmpty else { return false }
+        pendingAttachments.append(contentsOf: new)
+        return true
     }
 
     // MARK: - Append Methods
@@ -201,9 +340,7 @@ class TerminalView: NSView {
     }
 
     func endStreaming() {
-        if isStreaming {
-            isStreaming = false
-        }
+        if isStreaming { isStreaming = false }
     }
 
     func appendError(_ text: String) {
@@ -230,7 +367,7 @@ class TerminalView: NSView {
 
     func appendToolResult(summary: String, isError: Bool) {
         let t = theme
-        let color = isError ? t.errorColor : t.successColor
+        let color  = isError ? t.errorColor : t.successColor
         let prefix = isError ? "  FAIL " : "  DONE "
         let block = NSMutableAttributedString()
         block.append(NSAttributedString(string: prefix, attributes: [
@@ -279,7 +416,6 @@ class TerminalView: NSView {
         let result = NSMutableAttributedString()
         let lines = text.components(separatedBy: "\n")
         var inCodeBlock = false
-        var codeBlockLang = ""
         var codeLines: [String] = []
 
         for (i, line) in lines.enumerated() {
@@ -296,15 +432,11 @@ class TerminalView: NSView {
                     codeLines = []
                 } else {
                     inCodeBlock = true
-                    codeBlockLang = String(line.dropFirst(3))
                 }
                 continue
             }
 
-            if inCodeBlock {
-                codeLines.append(line)
-                continue
-            }
+            if inCodeBlock { codeLines.append(line); continue }
 
             if line.hasPrefix("### ") {
                 result.append(NSAttributedString(string: String(line.dropFirst(4)) + suffix, attributes: [
@@ -379,16 +511,12 @@ class TerminalView: NSView {
                         if afterParen < text.endIndex,
                            let closeParen = text[afterParen...].firstIndex(of: ")") {
                             let linkText = String(text[afterBracket..<closeBracket])
-                            let urlStr = String(text[afterParen..<closeParen])
+                            let urlStr   = String(text[afterParen..<closeParen])
                             var attrs: [NSAttributedString.Key: Any] = [
-                                .font: t.font,
-                                .foregroundColor: t.accentColor,
+                                .font: t.font, .foregroundColor: t.accentColor,
                                 .underlineStyle: NSUnderlineStyle.single.rawValue
                             ]
-                            if let url = URL(string: urlStr) {
-                                attrs[.link] = url
-                                attrs[.cursor] = NSCursor.pointingHand
-                            }
+                            if let url = URL(string: urlStr) { attrs[.link] = url }
                             result.append(NSAttributedString(string: linkText, attributes: attrs))
                             i = text.index(after: closeParen)
                             continue
@@ -405,13 +533,10 @@ class TerminalView: NSView {
                     }
                     let urlStr = String(text[i..<j])
                     var attrs: [NSAttributedString.Key: Any] = [
-                        .font: t.font,
-                        .foregroundColor: t.accentColor,
+                        .font: t.font, .foregroundColor: t.accentColor,
                         .underlineStyle: NSUnderlineStyle.single.rawValue
                     ]
-                    if let url = URL(string: urlStr) {
-                        attrs[.link] = url
-                    }
+                    if let url = URL(string: urlStr) { attrs[.link] = url }
                     result.append(NSAttributedString(string: urlStr, attributes: attrs))
                     i = j
                     continue

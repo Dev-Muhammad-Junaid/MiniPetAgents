@@ -36,10 +36,11 @@ class CodexSession: AgentSession {
             "/usr/local/bin/codex",
             "/opt/homebrew/bin/codex"
         ]) { [weak self] path in
-            guard let self = self, let binaryPath = path else {
+            guard let self = self else { return }
+            guard let binaryPath = path else {
                 let msg = "Codex CLI not found.\n\n\(AgentProvider.codex.installInstructions)"
-                self?.onError?(msg)
-                self?.history.append(AgentMessage(role: .error, text: msg))
+                self.onError?(msg)
+                self.history.append(AgentMessage(role: .error, text: msg))
                 return
             }
             Self.binaryPath = binaryPath
