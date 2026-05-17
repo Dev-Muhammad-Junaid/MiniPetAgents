@@ -24,23 +24,38 @@ final class ClickableBubbleView: NSView {
 /// macOS traffic-light minimize button.
 final class MinimizeChip: NSView {
     var onClick: (() -> Void)?
+    private var isHovered = false {
+        didSet { needsDisplay = true }
+    }
     override init(frame: NSRect) {
         super.init(frame: frame)
         wantsLayer = true
+        let area = NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeAlways],
+                                  owner: self, userInfo: nil)
+        addTrackingArea(area)
     }
     required init?(coder: NSCoder) { fatalError() }
+    override func mouseEntered(with event: NSEvent) { isHovered = true }
+    override func mouseExited(with event: NSEvent)  { isHovered = false }
     override func draw(_ dirtyRect: NSRect) {
+        // Red close circle — macOS traffic-light convention.
         let r = bounds.insetBy(dx: 1, dy: 1)
         let circle = NSBezierPath(ovalIn: r)
-        NSColor(calibratedRed: 0.99, green: 0.78, blue: 0.30, alpha: 1).setFill()
+        NSColor(calibratedRed: 1.0, green: 0.37, blue: 0.34, alpha: 1).setFill()
         circle.fill()
-        NSColor.black.withAlphaComponent(0.45).setStroke()
-        let bar = NSBezierPath()
-        bar.move(to: NSPoint(x: r.minX + 3, y: r.midY))
-        bar.line(to: NSPoint(x: r.maxX - 3, y: r.midY))
-        bar.lineWidth = 1.5
-        bar.lineCapStyle = .round
-        bar.stroke()
+        // Draw × only on hover for a clean look.
+        if isHovered {
+            NSColor.black.withAlphaComponent(0.50).setStroke()
+            let pad: CGFloat = 3.5
+            let cross = NSBezierPath()
+            cross.move(to: NSPoint(x: r.minX + pad, y: r.minY + pad))
+            cross.line(to: NSPoint(x: r.maxX - pad, y: r.maxY - pad))
+            cross.move(to: NSPoint(x: r.maxX - pad, y: r.minY + pad))
+            cross.line(to: NSPoint(x: r.minX + pad, y: r.maxY - pad))
+            cross.lineWidth = 1.5
+            cross.lineCapStyle = .round
+            cross.stroke()
+        }
     }
     override func resetCursorRects() { addCursorRect(bounds, cursor: .pointingHand) }
     override func mouseDown(with event: NSEvent) { onClick?() }
@@ -588,10 +603,15 @@ class WalkerCharacter {
 
     // MARK: - Click Handling & Popover
 
-    func handleClick() {
+    func handleClick(event: NSEvent? = nil) {
         if let action = clickAction { action(); return }
         if isOnboarding { openOnboardingPopover(); return }
-        if isIdleForPopover { closePopover() } else { openPopover() }
+        if isIdleForPopover {
+            closePopover()
+        } else {
+            let multiWindow = event?.modifierFlags.contains(.shift) ?? false
+            openPopover(multiWindow: multiWindow)
+        }
     }
 
     private func openOnboardingPopover() {
@@ -644,7 +664,15 @@ class WalkerCharacter {
         controller?.completeOnboarding()
     }
 
-    func openPopover() {
+    func openPopover(multiWindow: Bool = false) {
+        // Default behaviour: one chat at a time. Close siblings unless Shift was held.
+        if !multiWindow {
+            if let siblings = controller?.characters {
+                for sibling in siblings where sibling !== self && sibling.isIdleForPopover {
+                    sibling.closePopover()
+                }
+            }
+        }
         // Stop any in-flight throw so the pet doesn't keep bouncing behind the chat window.
         isBallistic = false
         ballisticVx = 0

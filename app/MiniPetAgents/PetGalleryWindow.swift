@@ -222,6 +222,7 @@ private struct PetCard: View {
     @State private var spawned = false
     @State private var providerOverride: AgentProvider? = nil
     @State private var sizeChoice = "default"
+    @State private var placementChoice: PlacementMode = .dock
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -254,6 +255,7 @@ private struct PetCard: View {
     private var infoSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             nameRow
+            settingsRow
             controlsRow
         }
         .padding(.horizontal, 12)
@@ -261,12 +263,22 @@ private struct PetCard: View {
     }
 
     private var nameRow: some View {
-        HStack(alignment: .firstTextBaseline) {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
             Text(pet.slug)
                 .font(.system(.subheadline, weight: .semibold))
                 .lineLimit(1)
             Spacer()
-            providerBadge
+            providerMenu
+        }
+    }
+
+    private var settingsRow: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "arrow.left.and.right")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+            placementPicker
+            Spacer()
         }
     }
 
@@ -343,21 +355,50 @@ private struct PetCard: View {
     }
 
     @ViewBuilder
-    private var providerBadge: some View {
+    private var providerMenu: some View {
         let p = providerOverride
-        let name = p?.displayName ?? "Default"
-        let color = p.map { Color(nsColor: $0.brandColor) } ?? Color.secondary
+        let color: Color = p.map { Color(nsColor: $0.brandColor) } ?? .secondary
+        Menu {
+            Button("Default (global setting)") { setProvider(nil) }
+            Divider()
+            ForEach(AgentProvider.allCases, id: \.self) { provider in
+                Button {
+                    setProvider(provider)
+                } label: {
+                    if p == provider {
+                        Label(provider.displayName, systemImage: "checkmark")
+                    } else {
+                        Text(provider.displayName)
+                    }
+                }
+            }
+        } label: {
+            Text(p?.displayName ?? "Default")
+                .font(.caption2.weight(.medium))
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(color.opacity(0.15), in: Capsule())
+                .foregroundStyle(color)
+                .overlay(Capsule().stroke(color.opacity(0.3), lineWidth: 0.5))
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .help("Select AI provider")
+    }
 
-        Text(name)
-            .font(.caption2.weight(.medium))
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .background(color.opacity(0.15), in: Capsule())
-            .foregroundStyle(color)
-            .overlay(Capsule().stroke(color.opacity(0.3), lineWidth: 0.5))
-        // Provider picker hidden behind the badge — tap to change
-            .onTapGesture { cycleProvider() }
-            .help("Tap to change provider")
+    private var placementPicker: some View {
+        Picker("Movement", selection: $placementChoice) {
+            ForEach(PlacementMode.allCases, id: \.self) { mode in
+                Text(mode.displayName).tag(mode)
+            }
+        }
+        .labelsHidden()
+        .frame(width: 110)
+        .onChange(of: placementChoice) { _, mode in
+            PetLibrary.setPreferredPlacement(mode, for: pet.slug)
+            controller?.refreshPet(slug: pet.slug)
+        }
+        .help("Pet movement / placement mode")
     }
 
     // MARK: Actions
@@ -365,6 +406,7 @@ private struct PetCard: View {
     private func setup() {
         spawned = pet.isSpawned
         providerOverride = pet.providerOverride
+        placementChoice = PetLibrary.preferredPlacement(for: pet.slug)
         sizeChoice = PetLibrary.storedPerPetDisplayHeight(slug: pet.slug).map { "\(Int($0))" } ?? "default"
         DispatchQueue.global(qos: .utility).async {
             let pack = pet.loadPack()
@@ -372,13 +414,9 @@ private struct PetCard: View {
         }
     }
 
-    private func cycleProvider() {
-        let all: [AgentProvider?] = [nil] + AgentProvider.allCases.map { Optional($0) }
-        let current = providerOverride
-        let nextIdx = (all.firstIndex(where: { $0 == current }) ?? 0 + 1) % all.count
-        let next = all[nextIdx]
-        providerOverride = next
-        pet.providerOverride = next
+    private func setProvider(_ provider: AgentProvider?) {
+        providerOverride = provider
+        pet.providerOverride = provider
         controller?.refreshPet(slug: pet.slug)
     }
 

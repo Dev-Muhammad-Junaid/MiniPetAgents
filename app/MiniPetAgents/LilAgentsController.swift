@@ -96,7 +96,7 @@ final class PetAgentsController {
 
     func openChat(slug: String) {
         guard let char = characters.first(where: { $0.petSlug == slug }) else { return }
-        char.openPopover()
+        char.openPopover(multiWindow: false)
     }
 
     /// Send a single prompt to every spawned pet (broadcast).

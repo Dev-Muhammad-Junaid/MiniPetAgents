@@ -142,7 +142,7 @@ class CharacterContentView: NSView {
         if wasDrag {
             character?.endDragSession()
         } else {
-            character?.handleClick()
+            character?.handleClick(event: event)
         }
         applyCursor()
     }
