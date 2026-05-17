@@ -225,89 +225,103 @@ private struct PetCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-
-            // Preview image banner
-            ZStack(alignment: .topTrailing) {
-                previewBanner
-                    .frame(height: 110)
-                    .clipped()
-
-                // Spawned indicator badge
-                if spawned {
-                    Circle()
-                        .fill(.green)
-                        .frame(width: 10, height: 10)
-                        .overlay(Circle().stroke(.white, lineWidth: 1.5))
-                        .padding(8)
-                }
-            }
-
+            bannerSection
             Divider()
-
-            // Info row
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(alignment: .firstTextBaseline) {
-                    Text(pet.slug)
-                        .font(.system(.subheadline, weight: .semibold))
-                        .lineLimit(1)
-                    Spacer()
-                    providerBadge
-                }
-
-                HStack(spacing: 6) {
-                    // Size picker
-                    Picker("Size", selection: $sizeChoice) {
-                        Text("Default").tag("default")
-                        ForEach(PetLibrary.displayHeightPresets, id: \.self) { h in
-                            Text("\(Int(h)) px").tag("\(Int(h))")
-                        }
-                    }
-                    .labelsHidden()
-                    .frame(width: 90)
-                    .onChange(of: sizeChoice) { _, v in applySizeChoice(v) }
-
-                    Spacer()
-
-                    // Chat button
-                    Button {
-                        controller?.openChat(slug: pet.slug)
-                    } label: {
-                        Image(systemName: "bubble.left")
-                    }
-                    .buttonStyle(.borderless)
-                    .foregroundStyle(spawned ? .blue : .tertiary)
-                    .disabled(!spawned)
-                    .help("Open chat")
-
-                    // Delete button
-                    Button { confirmDelete() } label: {
-                        Image(systemName: "trash")
-                    }
-                    .buttonStyle(.borderless)
-                    .foregroundStyle(.secondary)
-                    .help("Delete \(pet.slug)")
-
-                    // Spawn toggle
-                    Toggle("", isOn: $spawned)
-                        .toggleStyle(.switch)
-                        .labelsHidden()
-                        .scaleEffect(0.8)
-                        .help(spawned ? "Spawned — tap to remove" : "Spawn this pet")
-                        .onChange(of: spawned) { _, v in
-                            pet.isSpawned = v
-                            if v { controller?.spawn(pet: pet) } else { controller?.despawn(slug: pet.slug) }
-                            onChange()
-                        }
-                }
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
+            infoSection
         }
         .background(.background)
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .overlay(RoundedRectangle(cornerRadius: 12).stroke(.separator, lineWidth: 0.5))
         .shadow(color: .black.opacity(0.06), radius: 6, y: 2)
         .onAppear { setup() }
+    }
+
+    private var bannerSection: some View {
+        ZStack(alignment: .topTrailing) {
+            previewBanner
+                .frame(height: 110)
+                .clipped()
+            if spawned {
+                Circle()
+                    .fill(.green)
+                    .frame(width: 10, height: 10)
+                    .overlay(Circle().stroke(.white, lineWidth: 1.5))
+                    .padding(8)
+            }
+        }
+    }
+
+    private var infoSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            nameRow
+            controlsRow
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+    }
+
+    private var nameRow: some View {
+        HStack(alignment: .firstTextBaseline) {
+            Text(pet.slug)
+                .font(.system(.subheadline, weight: .semibold))
+                .lineLimit(1)
+            Spacer()
+            providerBadge
+        }
+    }
+
+    private var controlsRow: some View {
+        HStack(spacing: 6) {
+            sizePicker
+            Spacer()
+            chatButton
+            deleteButton
+            spawnToggle
+        }
+    }
+
+    private var sizePicker: some View {
+        Picker("Size", selection: $sizeChoice) {
+            Text("Default").tag("default")
+            ForEach(PetLibrary.displayHeightPresets, id: \.self) { h in
+                Text("\(Int(h)) px").tag("\(Int(h))")
+            }
+        }
+        .labelsHidden()
+        .frame(width: 90)
+        .onChange(of: sizeChoice) { _, v in applySizeChoice(v) }
+    }
+
+    private var chatButton: some View {
+        Button { controller?.openChat(slug: pet.slug) } label: {
+            Image(systemName: "bubble.left")
+        }
+        .buttonStyle(.borderless)
+        .foregroundStyle(spawned ? Color.blue : Color.secondary.opacity(0.4))
+        .disabled(!spawned)
+        .help("Open chat")
+    }
+
+    private var deleteButton: some View {
+        Button { confirmDelete() } label: {
+            Image(systemName: "trash")
+        }
+        .buttonStyle(.borderless)
+        .foregroundStyle(Color.secondary)
+        .help("Delete \(pet.slug)")
+    }
+
+    private var spawnToggle: some View {
+        Toggle("", isOn: $spawned)
+            .toggleStyle(.switch)
+            .labelsHidden()
+            .scaleEffect(0.8)
+            .help(spawned ? "Spawned — tap to remove" : "Spawn this pet")
+            .onChange(of: spawned) { _, v in
+                pet.isSpawned = v
+                if v { controller?.spawn(pet: pet) } else { controller?.despawn(slug: pet.slug) }
+                onChange()
+            }
     }
 
     // MARK: Sub-views
