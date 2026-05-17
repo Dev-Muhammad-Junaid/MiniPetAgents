@@ -46,7 +46,8 @@ struct PetGalleryView: View {
     @State private var installLog  = ""
     @State private var isInstalling = false
     @State private var searchText  = ""
-    @State private var isListView  = false
+    @State private var isListView    = false
+    @State private var listRefreshID = UUID()
 
     private var filteredPets: [InstalledPet] {
         searchText.isEmpty ? pets : pets.filter {
@@ -180,16 +181,64 @@ struct PetGalleryView: View {
     // MARK: List
 
     private var petList: some View {
-        ScrollView {
-            LazyVStack(spacing: 0) {
-                ForEach(filteredPets, id: \.slug) { pet in
-                    PetListRow(pet: pet, onChange: reloadPets)
-                        .environment(\.petController, controller)
-                    Divider().padding(.leading, 60)
+        VStack(spacing: 0) {
+            listHeader
+            Divider()
+            ScrollView {
+                LazyVStack(spacing: 0) {
+                    ForEach(filteredPets, id: \.slug) { pet in
+                        PetListRow(pet: pet, onChange: reloadPets)
+                            .environment(\.petController, controller)
+                        Divider().padding(.leading, 60)
+                    }
+                }
+                .padding(.vertical, 4)
+            }
+            .id(listRefreshID)
+        }
+    }
+
+    private var listHeader: some View {
+        HStack(spacing: 10) {
+            // thumbnail column
+            Color.clear.frame(width: 38, height: 1)
+            // name column
+            Text("PET")
+                .frame(minWidth: 80, alignment: .leading)
+            Spacer()
+            // CLI column
+            Text("CLI")
+                .frame(width: 84)
+            // Position column — icons set all pets at once
+            HStack(spacing: 0) {
+                ForEach(PlacementMode.allCases, id: \.self) { mode in
+                    Button { applyPlacementToAll(mode) } label: {
+                        Image(systemName: mode.symbolName)
+                            .frame(width: 22, height: 20)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .help("Set all to \(mode.displayName)")
                 }
             }
-            .padding(.vertical, 6)
+            // size column
+            Text("SIZE").frame(width: 62)
+            // actions column
+            Color.clear.frame(width: 80, height: 1)
         }
+        .font(.caption2.weight(.semibold))
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 6)
+        .background(Color(NSColor.controlBackgroundColor))
+    }
+
+    private func applyPlacementToAll(_ mode: PlacementMode) {
+        for pet in filteredPets {
+            PetLibrary.setPreferredPlacement(mode, for: pet.slug)
+            controller?.refreshPet(slug: pet.slug)
+        }
+        listRefreshID = UUID()  // force PetListRow rebuild so @State re-reads from PetLibrary
     }
 
     // MARK: Empty state
@@ -272,25 +321,52 @@ private struct ProviderMenuButton: NSViewRepresentable {
 
     private func buildMenu(_ btn: NSPopUpButton) {
         btn.removeAllItems()
-        btn.addItem(withTitle: "Default")
+        btn.imagePosition = .imageLeft
+
+        // "Default" item — generic globe icon
+        let defaultItem = NSMenuItem(title: "Default", action: nil, keyEquivalent: "")
+        defaultItem.image = sfIcon("circle.dotted", size: 13)
+        btn.menu?.addItem(defaultItem)
         btn.menu?.addItem(.separator())
-        AgentProvider.allCases.forEach { btn.addItem(withTitle: $0.displayName) }
+
+        for p in AgentProvider.allCases {
+            let item = NSMenuItem(title: p.displayName, action: nil, keyEquivalent: "")
+            item.image = providerIcon(p, size: 14)
+            btn.menu?.addItem(item)
+        }
     }
 
     private func syncSelection(_ btn: NSPopUpButton) {
+        // imagePosition must survive rebuilds
+        btn.imagePosition = .imageLeft
         if let p = selected {
             btn.selectItem(withTitle: p.displayName)
         } else {
             btn.selectItem(at: 0)
         }
-        // Tint the button title with the brand colour.
-        let color = selected.map { $0.brandColor } ?? NSColor.secondaryLabelColor
-        if let cell = btn.selectedItem?.title {
-            btn.attributedTitle = NSAttributedString(
-                string: cell,
-                attributes: [.foregroundColor: color,
-                             .font: NSFont.systemFont(ofSize: 10, weight: .medium)])
+        // Colour the button-face text with the brand colour
+        let color = selected?.brandColor ?? .secondaryLabelColor
+        let title = btn.selectedItem?.title ?? ""
+        btn.attributedTitle = NSAttributedString(
+            string: title,
+            attributes: [.foregroundColor: color,
+                         .font: NSFont.systemFont(ofSize: 10, weight: .medium)])
+    }
+
+    /// Load the provider's asset-catalog logo, scaled to `size`×`size`.
+    /// Falls back to the provider's SF Symbol if the image slot is empty.
+    private func providerIcon(_ provider: AgentProvider, size: CGFloat) -> NSImage {
+        let dim = NSSize(width: size, height: size)
+        if let asset = NSImage(named: provider.logoImageName) {
+            return asset.scaledCopy(to: dim)
         }
+        return sfIcon(provider.symbolName, size: size - 2)
+            ?? NSImage(size: dim)
+    }
+
+    private func sfIcon(_ name: String, size: CGFloat) -> NSImage? {
+        NSImage(systemSymbolName: name, accessibilityDescription: nil)?
+            .withSymbolConfiguration(.init(pointSize: size, weight: .medium))
     }
 
     final class Coordinator: NSObject {
@@ -679,5 +755,19 @@ private struct PetCard: View {
             PetLibrary.uninstall(slug: pet.slug)
             onChange()
         }
+    }
+}
+
+// MARK: - Helpers
+
+private extension NSImage {
+    /// Return a copy of the image drawn into a new canvas of `size`.
+    func scaledCopy(to size: NSSize) -> NSImage {
+        let result = NSImage(size: size)
+        result.lockFocus()
+        draw(in: NSRect(origin: .zero, size: size),
+             from: .zero, operation: .copy, fraction: 1.0)
+        result.unlockFocus()
+        return result
     }
 }
