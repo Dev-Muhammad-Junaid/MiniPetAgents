@@ -137,27 +137,54 @@ struct StackPlacement: PlacementStrategy {
 
     private let margin:  CGFloat = 8
     private let spacing: CGFloat = 10
+    /// Fraction of remaining distance covered each tick (60 Hz). 0.18 ≈ 0.23 s to travel.
+    private let lerpFactor: CGFloat = 0.18
+    /// Below this threshold the pet is considered "arrived" and snaps exactly.
+    private let snapThreshold: CGFloat = 1.0
 
     func update(_ pet: WalkerCharacter, context ctx: PlacementContext) {
         let screen = ctx.screen
-        let size = pet.displayHeight
+        let size   = pet.displayHeight
 
         let x: CGFloat = edge == .left
             ? screen.frame.minX + margin
             : screen.frame.maxX - size - margin
 
-        // Stack upward from the bottom of the visible frame.
-        let yBase = screen.visibleFrame.minY + margin
-        let y = yBase + CGFloat(pet.stackIndex) * (size + spacing)
+        // Target Y: stack upward from the bottom of the visible frame.
+        let yBase   = screen.visibleFrame.minY + margin
+        let targetY = yBase + CGFloat(pet.stackIndex) * (size + spacing)
 
-        // Keep the pet stationary in idle pose — no walking.
+        // --- Smooth repositioning ---
+        if pet.stackCurrentY < -9000 {
+            // First placement after spawning or mode-switch: snap immediately.
+            pet.stackCurrentY = targetY
+        } else {
+            let diff = targetY - pet.stackCurrentY
+            if abs(diff) > snapThreshold {
+                // Lerp toward target and animate the walk sprite.
+                pet.stackCurrentY += diff * lerpFactor
+                if !pet.isIdleForPopover {
+                    // Face the direction of motion and play the run cycle.
+                    let runState: PetState = diff > 0 ? .runRight : .runLeft
+                    pet.setSpriteState(runState, source: .ui)
+                }
+            } else {
+                // Close enough — snap and return to idle.
+                pet.stackCurrentY = targetY
+                if !pet.isIdleForPopover {
+                    pet.setSpriteState(.idle, source: .ui)
+                }
+            }
+        }
+
+        // Keep the pet stationary in X; suppress autonomous wandering.
         pet.isWalking = false
         if !pet.isIdleForPopover {
-            pet.isPaused    = true
+            pet.isPaused     = true
             pet.pauseEndTime = ctx.now + 9999
         }
 
-        pet.window.setFrameOrigin(NSPoint(x: x, y: y))
+        pet.window.setFrameOrigin(NSPoint(x: x, y: pet.stackCurrentY))
 
         if pet.isIdleForPopover { pet.updatePopoverPosition() }
         pet.updateThinkingBubble()

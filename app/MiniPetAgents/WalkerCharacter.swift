@@ -178,7 +178,9 @@ class WalkerCharacter {
     // MARK: - Placement
 
     /// Per-pet placement preference. Defaults to dock.
-    var placement: PlacementMode = .dock
+    var placement: PlacementMode = .dock {
+        didSet { if placement != oldValue { stackCurrentY = -9999 } }
+    }
 
     /// True while the user is dragging the pet window. Skips per-tick placement
     /// updates so the window stays where the cursor is until mouseUp.
@@ -201,6 +203,8 @@ class WalkerCharacter {
     /// True while the pet is flying after a throw.
     /// Position in a left/right stack column, assigned by the controller each tick.
     var stackIndex: Int = 0
+    /// Actual on-screen Y used by StackPlacement for smooth lerp. -9999 = unset (snap on first tick).
+    var stackCurrentY: CGFloat = -9999
     /// ID of the currently active chat session (persisted to HistoryStore).
     private var currentSessionId: String?
     var isBallistic: Bool = false

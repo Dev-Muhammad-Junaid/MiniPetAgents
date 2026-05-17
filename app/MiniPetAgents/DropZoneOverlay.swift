@@ -1,58 +1,73 @@
 import AppKit
 import QuartzCore
 
-/// Translucent overlay shown while the user drags a pet, highlighting the
-/// "Dock" zone at the bottom of the screen. Releasing the pet inside the
-/// zone switches the pet's placement to `.dock`; releasing anywhere else
-/// switches it to `.freeRoam`.
-///
-/// Only the dock zone has a visible panel — free-roam is implicit (the rest
-/// of the screen). This is the intentionally-simple two-zone model.
+/// Translucent overlay shown while the user drags a pet.
+/// Shows three drop targets — Dock (bottom), Left Stack, Right Stack —
+/// all rendered with a white-tinted palette so they read cleanly on any
+/// desktop background.  Releasing inside a target snaps the pet to that
+/// placement; releasing elsewhere keeps it in Free Roam.
 final class DropZoneOverlay {
     static let shared = DropZoneOverlay()
 
-    private var window: NSWindow?
-    private var zoneView: ZoneView?
-    /// Last-known zone in screen coords, used by `zoneAt(_:)`.
-    private(set) var dockZoneRect: NSRect = .zero
+    private var dockWindow:  NSWindow?
+    private var leftWindow:  NSWindow?
+    private var rightWindow: NSWindow?
 
-    /// Show the overlay anchored to the given screen, sized to the dock
-    /// icon strip (`dockX`/`dockWidth`/`dockTopY`).
+    private(set) var dockZoneRect:  NSRect = .zero
+    private(set) var leftZoneRect:  NSRect = .zero
+    private(set) var rightZoneRect: NSRect = .zero
+
+    // MARK: - Show
+
     func show(on screen: NSScreen, dockX: CGFloat, dockWidth: CGFloat, dockTopY: CGFloat) {
-        let zoneHeight: CGFloat = 96
-        // The "drop into dock" target sits where dock icons are. Pad sideways
-        // so dragging vaguely toward the dock still counts.
-        let pad: CGFloat = 24
-        let rect = NSRect(
+        // Dock strip at the bottom
+        let dockH: CGFloat = 96
+        let pad:   CGFloat = 24
+        dockZoneRect = NSRect(
             x: dockX - pad,
-            y: max(screen.visibleFrame.minY - zoneHeight * 0.4, screen.frame.minY),
+            y: max(screen.visibleFrame.minY - dockH * 0.4, screen.frame.minY),
             width: dockWidth + pad * 2,
-            height: zoneHeight
+            height: dockH
         )
-        dockZoneRect = rect
 
+        // Side strips running the full visible height
+        let stripW: CGFloat = 100
+        let stripY  = screen.visibleFrame.minY
+        let stripH  = screen.visibleFrame.height
+        leftZoneRect  = NSRect(x: screen.frame.minX,              y: stripY, width: stripW, height: stripH)
+        rightZoneRect = NSRect(x: screen.frame.maxX - stripW,     y: stripY, width: stripW, height: stripH)
+
+        showPanel(window: &dockWindow,  frame: dockZoneRect,  label: "Dock",        orientation: .horizontal)
+        showPanel(window: &leftWindow,  frame: leftZoneRect,  label: "Left Stack",  orientation: .vertical)
+        showPanel(window: &rightWindow, frame: rightZoneRect, label: "Right Stack", orientation: .vertical)
+    }
+
+    private func showPanel(window: inout NSWindow?,
+                           frame: NSRect,
+                           label: String,
+                           orientation: ZonePanel.Orientation) {
         if window == nil {
-            let w = NSWindow(contentRect: rect,
-                             styleMask: .borderless,
-                             backing: .buffered,
-                             defer: false)
+            let w = NSWindow(contentRect: frame, styleMask: .borderless,
+                             backing: .buffered, defer: false)
             w.isOpaque = false
             w.backgroundColor = .clear
             w.hasShadow = false
             w.ignoresMouseEvents = true
             w.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
-            // Above pets, below menu bar. Pet windows live at statusBar+i.
             w.level = NSWindow.Level(rawValue: NSWindow.Level.statusBar.rawValue + 100)
-            let v = ZoneView(frame: NSRect(origin: .zero, size: rect.size))
+            let v = ZonePanel(frame: NSRect(origin: .zero, size: frame.size))
+            v.label = label
+            v.orientation = orientation
             w.contentView = v
-            zoneView = v
             window = w
         } else {
-            window?.setFrame(rect, display: false)
-            zoneView?.frame = NSRect(origin: .zero, size: rect.size)
+            window?.setFrame(frame, display: false)
+            if let v = window?.contentView as? ZonePanel {
+                v.frame = NSRect(origin: .zero, size: frame.size)
+            }
         }
-        zoneView?.isHighlighted = false
-        zoneView?.needsDisplay = true
+        (window?.contentView as? ZonePanel)?.isHighlighted = false
+        window?.contentView?.needsDisplay = true
         window?.alphaValue = 0
         window?.orderFront(nil)
         NSAnimationContext.runAnimationGroup { ctx in
@@ -61,62 +76,116 @@ final class DropZoneOverlay {
         }
     }
 
-    /// Update which zone is "active" given the dragged pet's center in screen
-    /// coords. Returns the resolved placement so the caller can preview it.
+    // MARK: - Update
+
     @discardableResult
     func update(petCenter: NSPoint) -> PlacementMode {
-        let inDock = dockZoneRect.contains(petCenter)
-        zoneView?.isHighlighted = inDock
-        zoneView?.needsDisplay = true
-        return inDock ? .dock : .freeRoam
+        let inDock  = dockZoneRect.contains(petCenter)
+        let inLeft  = leftZoneRect.contains(petCenter)
+        let inRight = rightZoneRect.contains(petCenter)
+
+        highlight(window: dockWindow,  on: inDock)
+        highlight(window: leftWindow,  on: inLeft)
+        highlight(window: rightWindow, on: inRight)
+
+        if inDock  { return .dock }
+        if inLeft  { return .leftStack }
+        if inRight { return .rightStack }
+        return .freeRoam
     }
+
+    private func highlight(window: NSWindow?, on: Bool) {
+        guard let v = window?.contentView as? ZonePanel, v.isHighlighted != on else { return }
+        v.isHighlighted = on
+        v.needsDisplay = true
+    }
+
+    // MARK: - Hide
 
     func hide() {
-        guard let w = window else { return }
-        NSAnimationContext.runAnimationGroup({ ctx in
-            ctx.duration = 0.18
-            w.animator().alphaValue = 0
-        }, completionHandler: { [weak self] in
-            self?.window?.orderOut(nil)
-        })
+        for w in [dockWindow, leftWindow, rightWindow].compactMap({ $0 }) {
+            NSAnimationContext.runAnimationGroup({ ctx in
+                ctx.duration = 0.18
+                w.animator().alphaValue = 0
+            }, completionHandler: { w.orderOut(nil) })
+        }
     }
 
-    /// Returns the placement that would result from a drop at `point`
-    /// without changing overlay state.
+    // MARK: - Hit test
+
     func zoneAt(_ point: NSPoint) -> PlacementMode {
-        dockZoneRect.contains(point) ? .dock : .freeRoam
+        if dockZoneRect.contains(point)  { return .dock }
+        if leftZoneRect.contains(point)  { return .leftStack }
+        if rightZoneRect.contains(point) { return .rightStack }
+        return .freeRoam
     }
 }
 
-private final class ZoneView: NSView {
+// MARK: - Zone panel view
+
+private final class ZonePanel: NSView {
+    enum Orientation { case horizontal, vertical }
+
     var isHighlighted = false {
         didSet { if oldValue != isHighlighted { needsDisplay = true } }
     }
+    var label = ""
+    var orientation: Orientation = .horizontal
 
     override func draw(_ dirtyRect: NSRect) {
-        let r = bounds.insetBy(dx: 6, dy: 8)
-        let radius: CGFloat = 18
-        let path = NSBezierPath(roundedRect: r, xRadius: radius, yRadius: radius)
+        let r = orientation == .horizontal
+            ? bounds.insetBy(dx: 6,  dy: 8)
+            : bounds.insetBy(dx: 10, dy: 6)
 
-        // Fill: subtle when idle, brighter when the pet is over the zone.
-        let fillAlpha: CGFloat = isHighlighted ? 0.32 : 0.12
-        NSColor(calibratedRed: 0.30, green: 0.70, blue: 1.0, alpha: fillAlpha).setFill()
+        // White-tinted fill & border
+        let path = NSBezierPath(roundedRect: r, xRadius: 18, yRadius: 18)
+        NSColor.white.withAlphaComponent(isHighlighted ? 0.28 : 0.09).setFill()
         path.fill()
-
-        // Border: dashed-ish but rendered solid for cleanliness.
-        let borderAlpha: CGFloat = isHighlighted ? 0.85 : 0.45
-        NSColor(calibratedRed: 0.30, green: 0.70, blue: 1.0, alpha: borderAlpha).setStroke()
+        NSColor.white.withAlphaComponent(isHighlighted ? 0.85 : 0.38).setStroke()
         path.lineWidth = isHighlighted ? 2.5 : 1.5
         path.stroke()
 
-        // Label.
-        let title = isHighlighted ? "Drop here · Dock" : "Dock"
+        // Label — rotated 90° for vertical panels so it reads along the strip
+        let fontSize: CGFloat = orientation == .horizontal ? 13 : 11
         let attrs: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 13, weight: .semibold),
-            .foregroundColor: NSColor.white.withAlphaComponent(isHighlighted ? 0.95 : 0.7)
+            .font: NSFont.systemFont(ofSize: fontSize, weight: .semibold),
+            .foregroundColor: NSColor.white.withAlphaComponent(isHighlighted ? 0.95 : 0.65)
         ]
-        let s = NSAttributedString(string: title, attributes: attrs)
-        let size = s.size()
-        s.draw(at: NSPoint(x: r.midX - size.width / 2, y: r.midY - size.height / 2))
+
+        let primaryText = isHighlighted ? "Drop here" : label
+        let primary = NSAttributedString(string: primaryText, attributes: attrs)
+        let primarySize = primary.size()
+
+        if orientation == .vertical {
+            // Rotate the canvas so text reads top-to-bottom along the strip
+            guard let ctx = NSGraphicsContext.current?.cgContext else { return }
+            ctx.saveGState()
+            ctx.translateBy(x: r.midX, y: r.midY)
+            ctx.rotate(by: -.pi / 2)
+            primary.draw(at: NSPoint(x: -primarySize.width / 2, y: -primarySize.height / 2))
+
+            // When highlighted, also draw the zone name above it
+            if isHighlighted {
+                let smallAttrs: [NSAttributedString.Key: Any] = [
+                    .font: NSFont.systemFont(ofSize: 9, weight: .medium),
+                    .foregroundColor: NSColor.white.withAlphaComponent(0.75)
+                ]
+                let sub = NSAttributedString(string: label, attributes: smallAttrs)
+                let subSize = sub.size()
+                sub.draw(at: NSPoint(x: -subSize.width / 2,
+                                     y: primarySize.height / 2 + 3))
+            }
+            ctx.restoreGState()
+        } else {
+            // Horizontal (dock) — draw label centred
+            let drawLabel = isHighlighted ? "Drop here · \(label)" : label
+            let finalAttrs: [NSAttributedString.Key: Any] = [
+                .font: NSFont.systemFont(ofSize: fontSize, weight: .semibold),
+                .foregroundColor: NSColor.white.withAlphaComponent(isHighlighted ? 0.95 : 0.65)
+            ]
+            let s = NSAttributedString(string: drawLabel, attributes: finalAttrs)
+            let sz = s.size()
+            s.draw(at: NSPoint(x: r.midX - sz.width / 2, y: r.midY - sz.height / 2))
+        }
     }
 }
