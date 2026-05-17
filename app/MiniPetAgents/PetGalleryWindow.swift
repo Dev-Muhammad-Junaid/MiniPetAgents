@@ -211,6 +211,67 @@ struct PetGalleryView: View {
     }
 }
 
+// MARK: - Provider menu (isolated struct so the type-checker has a clean scope)
+
+private struct ProviderMenuButton: View {
+    let selected: AgentProvider?
+    let onSelect: (AgentProvider?) -> Void
+
+    private var label: String { selected?.displayName ?? "Default" }
+    private var color: Color {
+        guard let p = selected else { return .secondary }
+        return Color(nsColor: p.brandColor)
+    }
+
+    var body: some View {
+        Menu {
+            Button("Default") { onSelect(nil) }
+            Divider()
+            ForEach(AgentProvider.allCases, id: \.self) { p in
+                Button(p.displayName) { onSelect(p) }
+            }
+        } label: {
+            badgeLabel
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .help("Select AI provider")
+    }
+
+    private var badgeLabel: some View {
+        Text(label)
+            .font(.caption2.weight(.medium))
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(color.opacity(0.15), in: Capsule())
+            .foregroundStyle(color)
+            .overlay(Capsule().stroke(color.opacity(0.3), lineWidth: 0.5))
+    }
+}
+
+// MARK: - Placement picker (isolated struct)
+
+private struct PlacementPickerView: View {
+    @Binding var placement: PlacementMode
+    let slug: String
+    let onRefresh: () -> Void
+
+    var body: some View {
+        Picker("Movement", selection: $placement) {
+            ForEach(PlacementMode.allCases, id: \.self) { mode in
+                Text(mode.displayName).tag(mode)
+            }
+        }
+        .labelsHidden()
+        .frame(width: 110)
+        .onChange(of: placement) { _, mode in
+            PetLibrary.setPreferredPlacement(mode, for: slug)
+            onRefresh()
+        }
+        .help("Pet movement / placement mode")
+    }
+}
+
 // MARK: - Pet card
 
 private struct PetCard: View {
@@ -268,7 +329,7 @@ private struct PetCard: View {
                 .font(.system(.subheadline, weight: .semibold))
                 .lineLimit(1)
             Spacer()
-            providerMenu
+            ProviderMenuButton(selected: providerOverride, onSelect: setProvider)
         }
     }
 
@@ -277,7 +338,8 @@ private struct PetCard: View {
             Image(systemName: "arrow.left.and.right")
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
-            placementPicker
+            PlacementPickerView(placement: $placementChoice, slug: pet.slug,
+                                onRefresh: { controller?.refreshPet(slug: pet.slug) })
             Spacer()
         }
     }
@@ -352,53 +414,6 @@ private struct PetCard: View {
                 ProgressView().controlSize(.small)
             }
         }
-    }
-
-    @ViewBuilder
-    private var providerMenu: some View {
-        let p = providerOverride
-        let color: Color = p.map { Color(nsColor: $0.brandColor) } ?? .secondary
-        Menu {
-            Button("Default (global setting)") { setProvider(nil) }
-            Divider()
-            ForEach(AgentProvider.allCases, id: \.self) { provider in
-                Button {
-                    setProvider(provider)
-                } label: {
-                    if p == provider {
-                        Label(provider.displayName, systemImage: "checkmark")
-                    } else {
-                        Text(provider.displayName)
-                    }
-                }
-            }
-        } label: {
-            Text(p?.displayName ?? "Default")
-                .font(.caption2.weight(.medium))
-                .padding(.horizontal, 6)
-                .padding(.vertical, 2)
-                .background(color.opacity(0.15), in: Capsule())
-                .foregroundStyle(color)
-                .overlay(Capsule().stroke(color.opacity(0.3), lineWidth: 0.5))
-        }
-        .menuStyle(.borderlessButton)
-        .fixedSize()
-        .help("Select AI provider")
-    }
-
-    private var placementPicker: some View {
-        Picker("Movement", selection: $placementChoice) {
-            ForEach(PlacementMode.allCases, id: \.self) { mode in
-                Text(mode.displayName).tag(mode)
-            }
-        }
-        .labelsHidden()
-        .frame(width: 110)
-        .onChange(of: placementChoice) { _, mode in
-            PetLibrary.setPreferredPlacement(mode, for: pet.slug)
-            controller?.refreshPet(slug: pet.slug)
-        }
-        .help("Pet movement / placement mode")
     }
 
     // MARK: Actions
