@@ -211,41 +211,68 @@ struct PetGalleryView: View {
     }
 }
 
-// MARK: - Provider menu (isolated struct so the type-checker has a clean scope)
+// MARK: - Provider menu
+// Uses NSViewRepresentable + NSPopUpButton to avoid SwiftUI type-checker
+// timeouts that occur with Menu { } label: { } + chained modifiers.
 
-private struct ProviderMenuButton: View {
+private struct ProviderMenuButton: NSViewRepresentable {
     let selected: AgentProvider?
     let onSelect: (AgentProvider?) -> Void
 
-    private var label: String { selected?.displayName ?? "Default" }
-    private var color: Color {
-        guard let p = selected else { return .secondary }
-        return Color(nsColor: p.brandColor)
+    // Menu structure:  0=Default, 1=separator, 2…=allCases
+    private static let offset = 2
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    func makeNSView(context: Context) -> NSPopUpButton {
+        let btn = NSPopUpButton(frame: .zero, pullsDown: false)
+        btn.bezelStyle = .inline
+        btn.isBordered = false
+        btn.font = .systemFont(ofSize: 10, weight: .medium)
+        buildMenu(btn)
+        btn.target = context.coordinator
+        btn.action = #selector(Coordinator.changed(_:))
+        return btn
     }
 
-    var body: some View {
-        Menu {
-            Button("Default") { onSelect(nil) }
-            Divider()
-            ForEach(AgentProvider.allCases, id: \.self) { p in
-                Button(p.displayName) { onSelect(p) }
-            }
-        } label: {
-            badgeLabel
+    func updateNSView(_ btn: NSPopUpButton, context: Context) {
+        context.coordinator.onSelect = onSelect
+        if btn.numberOfItems == 0 { buildMenu(btn) }
+        syncSelection(btn)
+    }
+
+    private func buildMenu(_ btn: NSPopUpButton) {
+        btn.removeAllItems()
+        btn.addItem(withTitle: "Default")
+        btn.menu?.addItem(.separator())
+        AgentProvider.allCases.forEach { btn.addItem(withTitle: $0.displayName) }
+    }
+
+    private func syncSelection(_ btn: NSPopUpButton) {
+        if let p = selected {
+            btn.selectItem(withTitle: p.displayName)
+        } else {
+            btn.selectItem(at: 0)
         }
-        .menuStyle(.borderlessButton)
-        .fixedSize()
-        .help("Select AI provider")
+        // Tint the button title with the brand colour.
+        let color = selected.map { $0.brandColor } ?? NSColor.secondaryLabelColor
+        if let cell = btn.selectedItem?.title {
+            btn.attributedTitle = NSAttributedString(
+                string: cell,
+                attributes: [.foregroundColor: color,
+                             .font: NSFont.systemFont(ofSize: 10, weight: .medium)])
+        }
     }
 
-    private var badgeLabel: some View {
-        Text(label)
-            .font(.caption2.weight(.medium))
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .background(color.opacity(0.15), in: Capsule())
-            .foregroundStyle(color)
-            .overlay(Capsule().stroke(color.opacity(0.3), lineWidth: 0.5))
+    final class Coordinator: NSObject {
+        var onSelect: (AgentProvider?) -> Void = { _ in }
+        @objc func changed(_ sender: NSPopUpButton) {
+            let idx = sender.indexOfSelectedItem
+            if idx == 0 { onSelect(nil) }
+            else if idx >= ProviderMenuButton.offset {
+                onSelect(AgentProvider.allCases[idx - ProviderMenuButton.offset])
+            }
+        }
     }
 }
 
