@@ -256,6 +256,12 @@ final class PetAgentsController {
 
         let activeChars = characters.filter { $0.window?.isVisible ?? false }
 
+        // Assign stack slot indices so StackPlacement can position each pet.
+        let leftStack  = activeChars.filter { $0.placement == .leftStack  }.sorted { $0.petSlug < $1.petSlug }
+        let rightStack = activeChars.filter { $0.placement == .rightStack }.sorted { $0.petSlug < $1.petSlug }
+        for (i, c) in leftStack.enumerated()  { c.stackIndex = i }
+        for (i, c) in rightStack.enumerated() { c.stackIndex = i }
+
         // Tick the autonomous behavior planner for each pet. This sets sprite
         // state (idle/walk/sleep) and walkSpeedMultiplier per per-pet prefs;
         // placement strategies below execute the actual motion.

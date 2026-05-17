@@ -184,6 +184,10 @@ class WalkerCharacter {
     /// used to estimate release velocity on mouseUp.
     private var dragSamples: [(t: CFTimeInterval, p: NSPoint)] = []
     /// True while the pet is flying after a throw.
+    /// Position in a left/right stack column, assigned by the controller each tick.
+    var stackIndex: Int = 0
+    /// ID of the currently active chat session (persisted to HistoryStore).
+    private var currentSessionId: String?
     var isBallistic: Bool = false
     private var ballisticVx: CGFloat = 0
     private var ballisticVy: CGFloat = 0
@@ -659,9 +663,15 @@ class WalkerCharacter {
 
         if session == nil {
             let newSession = resolvedProvider.createSession()
-            // Restore persisted conversation history before starting.
-            let saved = HistoryStore.load(key: historyKey())
-            if !saved.isEmpty { newSession.history = saved }
+            // Restore the latest persisted session on first open.
+            if currentSessionId == nil,
+               let latest = HistoryStore.loadLatest(key: historyKey()) {
+                currentSessionId = latest.id
+                if !latest.messages.isEmpty { newSession.history = latest.messages }
+            }
+            if currentSessionId == nil {
+                currentSessionId = HistoryStore.newSessionId()
+            }
             session = newSession
             wireSession(newSession, providerName: resolvedProvider.displayName)
             newSession.start()
@@ -785,9 +795,40 @@ class WalkerCharacter {
         let titleLabel = NSTextField(labelWithString: titleString)
         titleLabel.font = t.titleFont
         titleLabel.textColor = t.titleText
-        titleLabel.frame = NSRect(x: 50, y: 6, width: popoverWidth - 62, height: 16)
+        // Leave 52px on the right for the two action buttons.
+        titleLabel.frame = NSRect(x: 50, y: 6, width: popoverWidth - 114, height: 16)
         titleLabel.autoresizingMask = [.width]
         titleBar.addSubview(titleLabel)
+
+        // Sessions list button — shows past conversations.
+        let sessionsBtn = NSButton(frame: NSRect(x: popoverWidth - 54, y: 5, width: 22, height: 18))
+        sessionsBtn.bezelStyle = .inline
+        sessionsBtn.isBordered = false
+        sessionsBtn.title = ""
+        if let img = NSImage(systemSymbolName: "clock.arrow.circlepath",
+                              accessibilityDescription: "Session history") {
+            sessionsBtn.image = img.withSymbolConfiguration(.init(pointSize: 10, weight: .regular))
+        }
+        sessionsBtn.contentTintColor = t.titleText.withAlphaComponent(0.6)
+        sessionsBtn.toolTip = "Browse chat history"
+        sessionsBtn.target = self
+        sessionsBtn.action = #selector(showSessionsMenu(_:))
+        titleBar.addSubview(sessionsBtn)
+
+        // New chat button — starts a fresh session.
+        let newChatBtn = NSButton(frame: NSRect(x: popoverWidth - 30, y: 5, width: 22, height: 18))
+        newChatBtn.bezelStyle = .inline
+        newChatBtn.isBordered = false
+        newChatBtn.title = ""
+        if let img = NSImage(systemSymbolName: "square.and.pencil",
+                              accessibilityDescription: "New chat") {
+            newChatBtn.image = img.withSymbolConfiguration(.init(pointSize: 10, weight: .regular))
+        }
+        newChatBtn.contentTintColor = t.titleText.withAlphaComponent(0.6)
+        newChatBtn.toolTip = "Start new chat"
+        newChatBtn.target = self
+        newChatBtn.action = #selector(startNewSession)
+        titleBar.addSubview(newChatBtn)
 
         let sep = NSView(frame: NSRect(x: 0, y: popoverHeight - titleBarHeight - 1,
                                        width: popoverWidth, height: 1))
@@ -830,6 +871,56 @@ class WalkerCharacter {
         closePopover()
     }
 
+    /// Start a fresh session, preserving current one on disk.
+    @objc func startNewSession() {
+        currentSessionId = HistoryStore.newSessionId()
+        session?.history = []
+        terminalView?.replayHistory([])
+    }
+
+    /// Pop a menu listing past sessions; selecting one loads it.
+    @objc func showSessionsMenu(_ sender: NSButton) {
+        let sessions = HistoryStore.listSessions(key: historyKey())
+        guard !sessions.isEmpty else {
+            let alert = NSAlert()
+            alert.messageText = "No saved sessions yet"
+            alert.informativeText = "Sessions are saved automatically after each response."
+            alert.runModal()
+            return
+        }
+
+        let menu = NSMenu()
+        let df = DateFormatter()
+        df.dateStyle = .short
+        df.timeStyle = .short
+
+        for s in sessions {
+            let title = "\(df.string(from: s.date))  \(s.preview)"
+            let item = NSMenuItem(title: title, action: #selector(loadSessionFromMenuItem(_:)),
+                                  keyEquivalent: "")
+            item.target = self
+            item.representedObject = s.id
+            // Mark current session with a checkmark.
+            item.state = (s.id == currentSessionId) ? .on : .off
+            menu.addItem(item)
+        }
+
+        let origin = NSPoint(x: sender.frame.minX, y: sender.frame.minY)
+        menu.popUp(positioning: menu.items.first, at: origin, in: sender.superview)
+    }
+
+    @objc private func loadSessionFromMenuItem(_ item: NSMenuItem) {
+        guard let sid = item.representedObject as? String else { return }
+        loadSession(id: sid)
+    }
+
+    private func loadSession(id: String) {
+        let messages = HistoryStore.load(key: historyKey(), sessionId: id)
+        currentSessionId = id
+        session?.history = messages
+        terminalView?.replayHistory(messages)
+    }
+
     private func historyKey() -> String {
         let slug = petSlug.isEmpty ? "unknown" : petSlug
         return "\(slug)-\(resolvedProvider.rawValue)"
@@ -853,8 +944,8 @@ class WalkerCharacter {
             self?.setSpriteState(.jumping, source: .session)
             self?.controller?.notifyTurnComplete(self)
             // Persist conversation history after every completed turn.
-            if let self, let session = self.session {
-                HistoryStore.save(key: self.historyKey(), messages: session.history)
+            if let self, let session = self.session, let sid = self.currentSessionId {
+                HistoryStore.save(key: self.historyKey(), sessionId: sid, messages: session.history)
             }
         }
         session.onError = { [weak self] text in
@@ -960,16 +1051,18 @@ class WalkerCharacter {
     func showBubble(text: String, isCompletion: Bool) {
         let t = resolvedTheme
         if thinkingBubbleWindow == nil { createThinkingBubble() }
-        // Completion bubbles intercept clicks so the user can dismiss them.
-        // Thinking bubbles stay click-through so the user can still click
-        // the pet underneath.
         thinkingBubbleWindow?.ignoresMouseEvents = !isCompletion
 
         let h = Self.bubbleH
-        let padding: CGFloat = 16
         let font = t.bubbleFont
         let textSize = (text as NSString).size(withAttributes: [.font: font])
-        let bubbleW = max(ceil(textSize.width) + padding * 2, 48)
+
+        // Show provider logo while the AI is actively generating.
+        let showLogo = !isCompletion && isAgentBusy
+        let logoSize: CGFloat = 12
+        let logoPad: CGFloat = showLogo ? logoSize + 6 : 0   // extra left space
+        let padding: CGFloat = 16
+        let bubbleW = max(ceil(textSize.width) + padding * 2 + logoPad, 48)
 
         let charFrame = window.frame
         let x = charFrame.midX - bubbleW / 2
@@ -984,11 +1077,31 @@ class WalkerCharacter {
             container.layer?.backgroundColor = t.bubbleBg.cgColor
             container.layer?.cornerRadius = t.bubbleCornerRadius
             container.layer?.borderColor = borderColor
+
+            // Update logo view
+            if let logoView = container.viewWithTag(101) as? NSImageView {
+                logoView.isHidden = !showLogo
+                if showLogo {
+                    logoView.frame = NSRect(x: 6, y: round((h - logoSize) / 2),
+                                           width: logoSize, height: logoSize)
+                    let provider = resolvedProvider
+                    if let img = NSImage(named: provider.logoImageName) {
+                        logoView.image = img
+                    } else if let sym = NSImage(systemSymbolName: provider.symbolName,
+                                                accessibilityDescription: nil) {
+                        logoView.image = sym.withSymbolConfiguration(
+                            .init(pointSize: 9, weight: .medium))
+                        logoView.contentTintColor = provider.brandColor
+                    }
+                }
+            }
+
             if let label = container.viewWithTag(100) as? NSTextField {
                 label.font = font
                 let lineH = ceil(textSize.height)
                 let labelY = round((h - lineH) / 2) - 1
-                label.frame = NSRect(x: 0, y: labelY, width: bubbleW, height: lineH + 2)
+                let labelX = showLogo ? logoPad + padding * 0.5 : 0
+                label.frame = NSRect(x: labelX, y: labelY, width: bubbleW - labelX, height: lineH + 2)
                 label.stringValue = text
                 label.textColor = textColor
             }
@@ -1048,9 +1161,6 @@ class WalkerCharacter {
         win.backgroundColor = .clear
         win.hasShadow = true
         win.level = NSWindow.Level(rawValue: NSWindow.Level.statusBar.rawValue + 5)
-        // Click handling is managed per-show: ignoresMouseEvents flips to
-        // false in showBubble(isCompletion: true) so the user can dismiss
-        // the completion bubble; thinking bubbles stay click-through.
         win.ignoresMouseEvents = true
         win.collectionBehavior = [.canJoinAllSpaces, .stationary]
 
@@ -1065,6 +1175,15 @@ class WalkerCharacter {
         let font = t.bubbleFont
         let lineH = ceil(("Xg" as NSString).size(withAttributes: [.font: font]).height)
         let labelY = round((h - lineH) / 2) - 1
+
+        // Provider logo icon — shown while the AI is generating (tag: 101).
+        let logoSize: CGFloat = 12
+        let logoView = NSImageView(frame: NSRect(x: 5, y: round((h - logoSize) / 2),
+                                                 width: logoSize, height: logoSize))
+        logoView.imageScaling = .scaleProportionallyUpOrDown
+        logoView.tag = 101
+        logoView.isHidden = true
+        container.addSubview(logoView)
 
         let label = NSTextField(labelWithString: "")
         label.font = font

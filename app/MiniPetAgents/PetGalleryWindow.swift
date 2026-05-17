@@ -1,26 +1,23 @@
 import AppKit
 import SwiftUI
 
-/// Singleton wrapper around the SwiftUI gallery window so we can show/hide
-/// it from the menubar without rebuilding state.
+// MARK: - Window controller
+
 final class PetGalleryWindowController {
     static let shared = PetGalleryWindowController()
-
     private var window: NSWindow?
     weak var controller: PetAgentsController?
 
     func show() {
         if let w = window { w.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true); return }
-
-        let view = PetGalleryView()
-            .environment(\.petController, controller)
-
+        let view = PetGalleryView().environment(\.petController, controller)
         let hosting = NSHostingController(rootView: view)
         let win = NSWindow(contentViewController: hosting)
-        win.title = "Mini Pet Agents — Gallery"
-        win.setContentSize(NSSize(width: 720, height: 520))
+        win.title = "Mini Pet Agents"
+        win.setContentSize(NSSize(width: 760, height: 560))
         win.styleMask = [.titled, .closable, .miniaturizable, .resizable]
         win.isReleasedWhenClosed = false
+        win.titlebarAppearsTransparent = true
         win.center()
         window = win
         win.makeKeyAndOrderFront(nil)
@@ -28,7 +25,7 @@ final class PetGalleryWindowController {
     }
 }
 
-// MARK: - SwiftUI Environment plumbing
+// MARK: - Environment
 
 private struct PetControllerKey: EnvironmentKey {
     static let defaultValue: PetAgentsController? = nil
@@ -40,107 +37,156 @@ extension EnvironmentValues {
     }
 }
 
-// MARK: - SwiftUI views
+// MARK: - Root gallery view
 
 struct PetGalleryView: View {
     @Environment(\.petController) private var controller
     @State private var pets: [InstalledPet] = []
-    @State private var installSlug: String = ""
-    @State private var installLog: String = ""
+    @State private var installSlug = ""
+    @State private var installLog  = ""
     @State private var isInstalling = false
+    @State private var searchText  = ""
+
+    private var filteredPets: [InstalledPet] {
+        searchText.isEmpty ? pets : pets.filter {
+            $0.slug.localizedCaseInsensitiveContains(searchText)
+        }
+    }
+    private var spawnedCount: Int { pets.filter(\.isSpawned).count }
 
     var body: some View {
         VStack(spacing: 0) {
-            installerBar
-            Divider()
-            if pets.isEmpty {
+            headerBar
+            Divider().opacity(0.4)
+            if filteredPets.isEmpty {
                 emptyState
             } else {
-                columnHeader
-                Divider()
-                ScrollView {
-                    LazyVStack(spacing: 0) {
-                        ForEach(pets, id: \.slug) { pet in
-                            PetRow(pet: pet) { reloadPets() }
-                                .environment(\.petController, controller)
-                            Divider()
-                        }
-                    }
-                }
+                petGrid
             }
         }
+        .background(Color(NSColor.windowBackgroundColor))
         .onAppear {
             reloadPets()
-            NotificationCenter.default.addObserver(forName: PetLibrary.didChange,
-                                                   object: nil, queue: .main) { _ in
-                reloadPets()
-            }
+            NotificationCenter.default.addObserver(
+                forName: PetLibrary.didChange, object: nil, queue: .main) { _ in reloadPets() }
         }
     }
 
-    private var installerBar: some View {
-        // Three stacked rows so nothing overlaps. Top: install field +
-        // buttons. Middle: usage tip (small, muted). Bottom: install log
-        // (only shown while installing or after the most recent run).
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 8) {
-                Image(systemName: "sparkles")
-                TextField("Install pet by slug (e.g. noir-webling)", text: $installSlug)
-                    .textFieldStyle(.roundedBorder)
-                    .onSubmit(triggerInstall)
-                    .disabled(isInstalling)
-                Button(isInstalling ? "Installing…" : "Install") { triggerInstall() }
-                    .disabled(installSlug.trimmingCharacters(in: .whitespaces).isEmpty || isInstalling)
-                Button("Browse petdex.crafter.run") {
-                    if let url = URL(string: "https://petdex.crafter.run/") { NSWorkspace.shared.open(url) }
-                }
-                .buttonStyle(.link)
-            }
-            Text("Drag a spawned pet anywhere on screen; click to open its chat. Pets resume walking after you drop them.")
-                .font(.caption2)
-                .foregroundStyle(.tertiary)
-            if !installLog.isEmpty {
-                Text(installLog)
-                    .font(.system(.caption, design: .monospaced))
-                    .lineLimit(2)
-                    .truncationMode(.tail)
+    // MARK: Header
+
+    private var headerBar: some View {
+        VStack(spacing: 10) {
+            HStack(alignment: .center, spacing: 10) {
+                // App identity
+                Image(systemName: "pawprint.fill")
+                    .font(.title2)
                     .foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Mini Pet Agents").font(.headline)
+                    Text("\(pets.count) installed · \(spawnedCount) active")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+                // Install controls
+                HStack(spacing: 6) {
+                    Image(systemName: "arrow.down.circle")
+                        .foregroundStyle(.secondary)
+                    TextField("Install by slug…", text: $installSlug)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 200)
+                        .onSubmit(triggerInstall)
+                        .disabled(isInstalling)
+                    Button(isInstalling ? "Installing…" : "Install") { triggerInstall() }
+                        .disabled(installSlug.trimmingCharacters(in: .whitespaces).isEmpty || isInstalling)
+                    Button {
+                        NSWorkspace.shared.open(URL(string: "https://petdex.crafter.run/")!)
+                    } label: {
+                        Label("Browse", systemImage: "safari")
+                    }
+                    .buttonStyle(.borderless)
+                    .foregroundStyle(.blue)
+                }
+            }
+            if !installLog.isEmpty {
+                HStack(spacing: 6) {
+                    Image(systemName: installLog.hasPrefix("✓") ? "checkmark.circle.fill" : "terminal")
+                        .foregroundStyle(installLog.hasPrefix("✓") ? .green : .secondary)
+                        .font(.caption)
+                    Text(installLog)
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                    Spacer()
+                }
+                .padding(.horizontal, 4)
+                .padding(.vertical, 4)
+                .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
+            }
+            // Search bar
+            if !pets.isEmpty {
+                HStack {
+                    Image(systemName: "magnifyingglass").foregroundStyle(.tertiary)
+                    TextField("Search pets…", text: $searchText)
+                        .textFieldStyle(.plain)
+                    if !searchText.isEmpty {
+                        Button { searchText = "" } label: {
+                            Image(systemName: "xmark.circle.fill").foregroundStyle(.tertiary)
+                        }.buttonStyle(.plain)
+                    }
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 5)
+                .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(NSColor.windowBackgroundColor))
+        .padding(.horizontal, 18)
+        .padding(.top, 14)
+        .padding(.bottom, 12)
     }
 
-    private var columnHeader: some View {
-        HStack(spacing: 12) {
-            Spacer().frame(width: 48)            // preview column
-            Text("PET").frame(maxWidth: .infinity, alignment: .leading)
-            Text("PROVIDER").frame(width: 100, alignment: .leading)
-            Text("SIZE").frame(width: 70, alignment: .leading)
-            Text("SPAWN").frame(width: 40, alignment: .leading)
-            Spacer().frame(width: 100)           // chat + delete buttons
+    // MARK: Grid
+
+    private let columns = [
+        GridItem(.adaptive(minimum: 200, maximum: 280), spacing: 14)
+    ]
+
+    private var petGrid: some View {
+        ScrollView {
+            LazyVGrid(columns: columns, spacing: 14) {
+                ForEach(filteredPets, id: \.slug) { pet in
+                    PetCard(pet: pet, onChange: reloadPets)
+                        .environment(\.petController, controller)
+                }
+            }
+            .padding(16)
         }
-        .font(.caption2.weight(.semibold))
-        .foregroundStyle(.secondary)
-        .padding(.horizontal, 14)
-        .padding(.vertical, 6)
     }
+
+    // MARK: Empty state
 
     private var emptyState: some View {
-        VStack(spacing: 12) {
-            Image(systemName: "pawprint")
-                .font(.system(size: 48))
-                .foregroundStyle(.secondary)
+        VStack(spacing: 16) {
+            Image(systemName: "pawprint.circle")
+                .font(.system(size: 56, weight: .thin))
+                .foregroundStyle(.quaternary)
             Text("No pets installed yet")
-                .font(.headline)
-            Text("Install one above, or run `npx petdex install <slug>` in your terminal.")
+                .font(.title3.weight(.medium))
+            Text("Enter a slug above to install your first pet,\nor browse the gallery online.")
                 .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+            Button {
+                NSWorkspace.shared.open(URL(string: "https://petdex.crafter.run/")!)
+            } label: {
+                Label("Browse petdex.crafter.run", systemImage: "safari")
+            }
+            .buttonStyle(.borderedProminent)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding(40)
+        .padding(50)
     }
+
+    // MARK: Actions
 
     private func reloadPets() { pets = PetLibrary.shared.pets }
 
@@ -148,14 +194,14 @@ struct PetGalleryView: View {
         let slug = installSlug.trimmingCharacters(in: .whitespaces)
         guard !slug.isEmpty else { return }
         isInstalling = true
-        installLog = "$ npx petdex install \(slug)"
+        installLog = "Installing \(slug)…"
         PetInstaller.shared.install(slug: slug, onOutput: { progress in
             installLog = progress.line.trimmingCharacters(in: .newlines)
         }, onComplete: { result in
             isInstalling = false
             switch result {
             case .success:
-                installLog = "✓ installed \(slug)"
+                installLog = "✓ Installed \(slug)"
                 installSlug = ""
                 reloadPets()
             case .failure(let err):
@@ -165,103 +211,173 @@ struct PetGalleryView: View {
     }
 }
 
-private struct PetRow: View {
+// MARK: - Pet card
+
+private struct PetCard: View {
     let pet: InstalledPet
     var onChange: () -> Void
     @Environment(\.petController) private var controller
 
     @State private var preview: NSImage?
-    @State private var spawned: Bool = false
+    @State private var spawned = false
     @State private var providerOverride: AgentProvider? = nil
-    @State private var sizeChoice: String = "default"
+    @State private var sizeChoice = "default"
 
     var body: some View {
-        // Single-row layout. Placement, walk speed, and movement mode now
-        // live in the menubar / drag-to-zone UX; the gallery is just the
-        // pet roster.
-        HStack(spacing: 12) {
-            previewView
-                .frame(width: 48, height: 48)
-                .background(Color.secondary.opacity(0.1))
-                .cornerRadius(8)
+        VStack(alignment: .leading, spacing: 0) {
 
-            VStack(alignment: .leading, spacing: 2) {
-                Text(pet.slug).font(.headline)
-                Text(pet.folderURL.path)
-                    .font(.caption)
+            // Preview image banner
+            ZStack(alignment: .topTrailing) {
+                previewBanner
+                    .frame(height: 110)
+                    .clipped()
+
+                // Spawned indicator badge
+                if spawned {
+                    Circle()
+                        .fill(.green)
+                        .frame(width: 10, height: 10)
+                        .overlay(Circle().stroke(.white, lineWidth: 1.5))
+                        .padding(8)
+                }
+            }
+
+            Divider()
+
+            // Info row
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text(pet.slug)
+                        .font(.system(.subheadline, weight: .semibold))
+                        .lineLimit(1)
+                    Spacer()
+                    providerBadge
+                }
+
+                HStack(spacing: 6) {
+                    // Size picker
+                    Picker("Size", selection: $sizeChoice) {
+                        Text("Default").tag("default")
+                        ForEach(PetLibrary.displayHeightPresets, id: \.self) { h in
+                            Text("\(Int(h)) px").tag("\(Int(h))")
+                        }
+                    }
+                    .labelsHidden()
+                    .frame(width: 90)
+                    .onChange(of: sizeChoice) { _, v in applySizeChoice(v) }
+
+                    Spacer()
+
+                    // Chat button
+                    Button {
+                        controller?.openChat(slug: pet.slug)
+                    } label: {
+                        Image(systemName: "bubble.left")
+                    }
+                    .buttonStyle(.borderless)
+                    .foregroundStyle(spawned ? .blue : .tertiary)
+                    .disabled(!spawned)
+                    .help("Open chat")
+
+                    // Delete button
+                    Button { confirmDelete() } label: {
+                        Image(systemName: "trash")
+                    }
+                    .buttonStyle(.borderless)
                     .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-            }
+                    .help("Delete \(pet.slug)")
 
-            Spacer()
-
-            Picker("Provider", selection: providerBinding) {
-                Text("Default").tag(AgentProvider?.none)
-                ForEach(AgentProvider.allCases, id: \.self) { p in
-                    Text(p.displayName).tag(AgentProvider?.some(p))
+                    // Spawn toggle
+                    Toggle("", isOn: $spawned)
+                        .toggleStyle(.switch)
+                        .labelsHidden()
+                        .scaleEffect(0.8)
+                        .help(spawned ? "Spawned — tap to remove" : "Spawn this pet")
+                        .onChange(of: spawned) { _, v in
+                            pet.isSpawned = v
+                            if v { controller?.spawn(pet: pet) } else { controller?.despawn(slug: pet.slug) }
+                            onChange()
+                        }
                 }
             }
-            .labelsHidden()
-            .frame(width: 100)
-
-            Picker("Size", selection: $sizeChoice) {
-                Text("Def").tag("default")
-                ForEach(PetLibrary.displayHeightPresets, id: \.self) { h in
-                    Text("\(Int(h))").tag("\(Int(h))")
-                }
-            }
-            .labelsHidden()
-            .frame(width: 70)
-            .onChange(of: sizeChoice) { _, newVal in
-                applySizeChoice(newVal)
-            }
-
-            // Spawn switch — column header makes the label redundant.
-            Toggle("", isOn: $spawned)
-                .toggleStyle(.switch)
-                .labelsHidden()
-                .help(spawned ? "Spawned — toggle to remove from screen" : "Spawn this pet")
-                .onChange(of: spawned) { newValue in
-                    pet.isSpawned = newValue
-                    if newValue { controller?.spawn(pet: pet) } else { controller?.despawn(slug: pet.slug) }
-                    onChange()
-                }
-
-            Button("Open Chat") {
-                controller?.openChat(slug: pet.slug)
-            }
-            .disabled(!spawned)
-
-            Button {
-                confirmDeletePet()
-            } label: {
-                Image(systemName: "trash")
-            }
-            .buttonStyle(.borderless)
-            .help("Delete \(pet.slug) and remove its files")
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
-        .onAppear {
-            spawned = pet.isSpawned
-            providerOverride = pet.providerOverride
-            if let s = PetLibrary.storedPerPetDisplayHeight(slug: pet.slug) {
-                sizeChoice = "\(Int(s))"
+        .background(.background)
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(.separator, lineWidth: 0.5))
+        .shadow(color: .black.opacity(0.06), radius: 6, y: 2)
+        .onAppear { setup() }
+    }
+
+    // MARK: Sub-views
+
+    @ViewBuilder
+    private var previewBanner: some View {
+        ZStack {
+            Color.secondary.opacity(0.08)
+            if let img = preview {
+                Image(nsImage: img)
+                    .interpolation(.none)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(height: 80)
             } else {
-                sizeChoice = "default"
-            }
-            DispatchQueue.global(qos: .utility).async {
-                let pack = pet.loadPack()
-                DispatchQueue.main.async { preview = pack?.previewFrame }
+                ProgressView().controlSize(.small)
             }
         }
     }
 
-    private func confirmDeletePet() {
+    @ViewBuilder
+    private var providerBadge: some View {
+        let p = providerOverride
+        let name = p?.displayName ?? "Default"
+        let color = p.map { Color(nsColor: $0.brandColor) } ?? Color.secondary
+
+        Text(name)
+            .font(.caption2.weight(.medium))
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(color.opacity(0.15), in: Capsule())
+            .foregroundStyle(color)
+            .overlay(Capsule().stroke(color.opacity(0.3), lineWidth: 0.5))
+        // Provider picker hidden behind the badge — tap to change
+            .onTapGesture { cycleProvider() }
+            .help("Tap to change provider")
+    }
+
+    // MARK: Actions
+
+    private func setup() {
+        spawned = pet.isSpawned
+        providerOverride = pet.providerOverride
+        sizeChoice = PetLibrary.storedPerPetDisplayHeight(slug: pet.slug).map { "\(Int($0))" } ?? "default"
+        DispatchQueue.global(qos: .utility).async {
+            let pack = pet.loadPack()
+            DispatchQueue.main.async { preview = pack?.previewFrame }
+        }
+    }
+
+    private func cycleProvider() {
+        let all: [AgentProvider?] = [nil] + AgentProvider.allCases.map { Optional($0) }
+        let current = providerOverride
+        let nextIdx = (all.firstIndex(where: { $0 == current }) ?? 0 + 1) % all.count
+        let next = all[nextIdx]
+        providerOverride = next
+        pet.providerOverride = next
+        controller?.refreshPet(slug: pet.slug)
+    }
+
+    private func applySizeChoice(_ v: String) {
+        if v == "default" { PetLibrary.clearPerPetDisplayHeight(slug: pet.slug) }
+        else if let h = Double(v) { PetLibrary.setDisplayHeight(CGFloat(h), for: pet.slug) }
+        controller?.refreshPet(slug: pet.slug)
+    }
+
+    private func confirmDelete() {
         let alert = NSAlert()
         alert.messageText = "Delete \(pet.slug)?"
-        alert.informativeText = "This removes the pet's files from ~/.codex/pets/ and clears its preferences. You can reinstall it any time with `npx petdex install \(pet.slug)`."
+        alert.informativeText = "Removes files from disk and clears preferences. You can reinstall any time."
         alert.alertStyle = .warning
         alert.addButton(withTitle: "Delete")
         alert.addButton(withTitle: "Cancel")
@@ -269,38 +385,6 @@ private struct PetRow: View {
             controller?.despawn(slug: pet.slug)
             PetLibrary.uninstall(slug: pet.slug)
             onChange()
-        }
-    }
-
-    private func applySizeChoice(_ newVal: String) {
-        if newVal == "default" {
-            PetLibrary.clearPerPetDisplayHeight(slug: pet.slug)
-        } else if let v = Double(newVal) {
-            PetLibrary.setDisplayHeight(CGFloat(v), for: pet.slug)
-        }
-        controller?.refreshPet(slug: pet.slug)
-    }
-
-    private var providerBinding: Binding<AgentProvider?> {
-        Binding(
-            get: { providerOverride },
-            set: { newValue in
-                providerOverride = newValue
-                pet.providerOverride = newValue
-                controller?.refreshPet(slug: pet.slug)
-            }
-        )
-    }
-
-    @ViewBuilder
-    private var previewView: some View {
-        if let image = preview {
-            Image(nsImage: image)
-                .interpolation(.none)
-                .resizable()
-                .aspectRatio(contentMode: .fit)
-        } else {
-            ProgressView().controlSize(.small)
         }
     }
 }

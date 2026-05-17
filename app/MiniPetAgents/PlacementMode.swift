@@ -8,11 +8,15 @@ import QuartzCore
 enum PlacementMode: String, CaseIterable {
     case dock
     case freeRoam
+    case leftStack
+    case rightStack
 
     var displayName: String {
         switch self {
-        case .dock:     return "Dock"
-        case .freeRoam: return "Free Roam"
+        case .dock:       return "Dock"
+        case .freeRoam:   return "Free Roam"
+        case .leftStack:  return "Left Stack"
+        case .rightStack: return "Right Stack"
         }
     }
 }
@@ -44,8 +48,10 @@ extension PlacementStrategy {
 enum PlacementStrategies {
     static func strategy(for mode: PlacementMode) -> PlacementStrategy {
         switch mode {
-        case .dock:     return DockPlacement()
-        case .freeRoam: return FreeRoamPlacement()
+        case .dock:       return DockPlacement()
+        case .freeRoam:   return FreeRoamPlacement()
+        case .leftStack:  return StackPlacement(edge: .left)
+        case .rightStack: return StackPlacement(edge: .right)
         }
     }
 }
@@ -119,6 +125,41 @@ struct FreeRoamPlacement: PlacementStrategy {
             pet.window.setFrameOrigin(NSPoint(x: x, y: y))
         }
 
+        pet.updateThinkingBubble()
+    }
+}
+
+// MARK: - Stack (vertical column on left or right screen edge)
+
+struct StackPlacement: PlacementStrategy {
+    enum Edge { case left, right }
+    let edge: Edge
+
+    private let margin:  CGFloat = 8
+    private let spacing: CGFloat = 10
+
+    func update(_ pet: WalkerCharacter, context ctx: PlacementContext) {
+        let screen = ctx.screen
+        let size = pet.displayHeight
+
+        let x: CGFloat = edge == .left
+            ? screen.frame.minX + margin
+            : screen.frame.maxX - size - margin
+
+        // Stack upward from the bottom of the visible frame.
+        let yBase = screen.visibleFrame.minY + margin
+        let y = yBase + CGFloat(pet.stackIndex) * (size + spacing)
+
+        // Keep the pet stationary in idle pose — no walking.
+        pet.isWalking = false
+        if !pet.isIdleForPopover {
+            pet.isPaused    = true
+            pet.pauseEndTime = ctx.now + 9999
+        }
+
+        pet.window.setFrameOrigin(NSPoint(x: x, y: y))
+
+        if pet.isIdleForPopover { pet.updatePopoverPosition() }
         pet.updateThinkingBubble()
     }
 }
