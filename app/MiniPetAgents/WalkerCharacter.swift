@@ -436,15 +436,16 @@ class WalkerCharacter {
 
         DropZoneOverlay.shared.hide()
 
-        if speed >= Self.throwSpeedThreshold {
-            // THROW: skip the zone resolve until the pet lands.
+        // Resolve the drop zone first. Only throw when releasing in open
+        // free-roam space — dropping onto a named zone always places.
+        let center = NSPoint(x: win.frame.midX, y: win.frame.midY)
+        let resolved = DropZoneOverlay.shared.zoneAt(center)
+
+        if speed >= Self.throwSpeedThreshold && resolved == .freeRoam {
+            // THROW: fast release in open space with no target zone.
             startBallistic(vx: vx, vy: vy)
             return
         }
-
-        // Slow drop — treat as a deliberate placement.
-        let center = NSPoint(x: win.frame.midX, y: win.frame.midY)
-        let resolved = DropZoneOverlay.shared.zoneAt(center)
         if resolved != placement, let pet = PetLibrary.shared.pet(slug: petSlug) {
             pet.placement = resolved          // persists via UserDefaults
             placement = resolved

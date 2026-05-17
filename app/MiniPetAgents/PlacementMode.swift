@@ -19,6 +19,16 @@ enum PlacementMode: String, CaseIterable {
         case .rightStack: return "Right Stack"
         }
     }
+
+    /// SF Symbol representing the placement mode in the gallery.
+    var symbolName: String {
+        switch self {
+        case .dock:       return "square.bottomhalf.filled"
+        case .freeRoam:   return "arrow.up.left.and.arrow.down.right"
+        case .leftStack:  return "sidebar.left"
+        case .rightStack: return "sidebar.right"
+        }
+    }
 }
 
 /// Geometry context fed into every per-tick placement update. Computed once

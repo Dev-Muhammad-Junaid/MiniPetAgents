@@ -46,6 +46,7 @@ struct PetGalleryView: View {
     @State private var installLog  = ""
     @State private var isInstalling = false
     @State private var searchText  = ""
+    @State private var isListView  = false
 
     private var filteredPets: [InstalledPet] {
         searchText.isEmpty ? pets : pets.filter {
@@ -60,6 +61,8 @@ struct PetGalleryView: View {
             Divider().opacity(0.4)
             if filteredPets.isEmpty {
                 emptyState
+            } else if isListView {
+                petList
             } else {
                 petGrid
             }
@@ -105,6 +108,17 @@ struct PetGalleryView: View {
                     }
                     .buttonStyle(.borderless)
                     .foregroundStyle(.blue)
+
+                    Divider().frame(height: 16)
+
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.15)) { isListView.toggle() }
+                    } label: {
+                        Image(systemName: isListView ? "square.grid.2x2" : "list.bullet")
+                            .help(isListView ? "Switch to grid view" : "Switch to list view")
+                    }
+                    .buttonStyle(.borderless)
+                    .foregroundStyle(.secondary)
                 }
             }
             if !installLog.isEmpty {
@@ -160,6 +174,21 @@ struct PetGalleryView: View {
                 }
             }
             .padding(16)
+        }
+    }
+
+    // MARK: List
+
+    private var petList: some View {
+        ScrollView {
+            LazyVStack(spacing: 0) {
+                ForEach(filteredPets, id: \.slug) { pet in
+                    PetListRow(pet: pet, onChange: reloadPets)
+                        .environment(\.petController, controller)
+                    Divider().padding(.leading, 60)
+                }
+            }
+            .padding(.vertical, 6)
         }
     }
 
@@ -276,26 +305,196 @@ private struct ProviderMenuButton: NSViewRepresentable {
     }
 }
 
-// MARK: - Placement picker (isolated struct)
 
-private struct PlacementPickerView: View {
+// MARK: - Placement icon picker
+// Four SF symbol buttons — one per PlacementMode. Selected mode is tinted
+// with the accent colour; each button shows a tooltip on hover.
+
+private struct PlacementIconPicker: View {
     @Binding var placement: PlacementMode
     let slug: String
     let onRefresh: () -> Void
 
     var body: some View {
-        Picker("Movement", selection: $placement) {
-            ForEach(PlacementMode.allCases, id: \.self) { mode in
-                Text(mode.displayName).tag(mode)
+        HStack(spacing: 2) {
+            iconButton(for: .dock)
+            iconButton(for: .freeRoam)
+            iconButton(for: .leftStack)
+            iconButton(for: .rightStack)
+        }
+    }
+
+    private func iconButton(for mode: PlacementMode) -> some View {
+        let isSelected = placement == mode
+        return Button {
+            placement = mode
+            PetLibrary.setPreferredPlacement(mode, for: slug)
+            onRefresh()
+        } label: {
+            Image(systemName: mode.symbolName)
+                .font(.system(size: 11, weight: isSelected ? .semibold : .regular))
+                .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
+                .frame(width: 22, height: 22)
+                .background(
+                    isSelected
+                        ? Color.accentColor.opacity(0.12)
+                        : Color.clear,
+                    in: RoundedRectangle(cornerRadius: 5)
+                )
+        }
+        .buttonStyle(.plain)
+        .help(mode.displayName)
+    }
+}
+
+// MARK: - Pet list row
+
+private struct PetListRow: View {
+    let pet: InstalledPet
+    var onChange: () -> Void
+    @Environment(\.petController) private var controller
+
+    @State private var preview: NSImage?
+    @State private var spawned = false
+    @State private var providerOverride: AgentProvider? = nil
+    @State private var placementChoice: PlacementMode = .dock
+    @State private var sizeChoice = "default"
+
+    var body: some View {
+        HStack(spacing: 10) {
+            thumbnailView
+            nameColumn
+            Spacer()
+            ProviderMenuButton(selected: providerOverride, onSelect: setProvider)
+                .frame(width: 80)
+            PlacementIconPicker(placement: $placementChoice, slug: pet.slug,
+                                onRefresh: { controller?.refreshPet(slug: pet.slug) })
+            sizePicker
+            actionButtons
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 7)
+        .onAppear { setup() }
+    }
+
+    // MARK: Sub-views
+
+    private var thumbnailView: some View {
+        Group {
+            if let img = preview {
+                Image(nsImage: img)
+                    .interpolation(.none)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+            } else {
+                Color.secondary.opacity(0.08)
+            }
+        }
+        .frame(width: 38, height: 38)
+        .background(Color.secondary.opacity(0.08))
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .overlay(alignment: .topTrailing) {
+            if spawned {
+                Circle()
+                    .fill(.green)
+                    .frame(width: 8, height: 8)
+                    .overlay(Circle().stroke(.white, lineWidth: 1))
+                    .offset(x: 2, y: -2)
+            }
+        }
+    }
+
+    private var nameColumn: some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Text(pet.slug)
+                .font(.system(.subheadline, weight: .medium))
+                .lineLimit(1)
+            Text(pet.folderURL.lastPathComponent)
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+                .lineLimit(1)
+        }
+        .frame(minWidth: 80, alignment: .leading)
+    }
+
+    private var sizePicker: some View {
+        Picker("", selection: $sizeChoice) {
+            Text("Def").tag("default")
+            ForEach(PetLibrary.displayHeightPresets, id: \.self) { h in
+                Text("\(Int(h))").tag("\(Int(h))")
             }
         }
         .labelsHidden()
-        .frame(width: 110)
-        .onChange(of: placement) { _, mode in
-            PetLibrary.setPreferredPlacement(mode, for: slug)
-            onRefresh()
+        .frame(width: 62)
+        .onChange(of: sizeChoice) { _, v in
+            if v == "default" { PetLibrary.clearPerPetDisplayHeight(slug: pet.slug) }
+            else if let h = Double(v) { PetLibrary.setDisplayHeight(CGFloat(h), for: pet.slug) }
+            controller?.refreshPet(slug: pet.slug)
         }
-        .help("Pet movement / placement mode")
+        .help("Display size")
+    }
+
+    private var actionButtons: some View {
+        HStack(spacing: 4) {
+            Button { controller?.openChat(slug: pet.slug) } label: {
+                Image(systemName: "bubble.left")
+            }
+            .buttonStyle(.borderless)
+            .foregroundStyle(spawned ? Color.blue : Color.secondary.opacity(0.4))
+            .disabled(!spawned)
+            .help("Open chat")
+
+            Button { confirmDelete() } label: {
+                Image(systemName: "trash")
+            }
+            .buttonStyle(.borderless)
+            .foregroundStyle(Color.secondary)
+            .help("Delete \(pet.slug)")
+
+            Toggle("", isOn: $spawned)
+                .toggleStyle(.switch)
+                .labelsHidden()
+                .scaleEffect(0.75)
+                .help(spawned ? "Spawned — toggle off to remove" : "Spawn this pet")
+                .onChange(of: spawned) { _, v in
+                    pet.isSpawned = v
+                    if v { controller?.spawn(pet: pet) } else { controller?.despawn(slug: pet.slug) }
+                    onChange()
+                }
+        }
+    }
+
+    // MARK: Actions
+
+    private func setup() {
+        spawned = pet.isSpawned
+        providerOverride = pet.providerOverride
+        placementChoice = PetLibrary.preferredPlacement(for: pet.slug)
+        sizeChoice = PetLibrary.storedPerPetDisplayHeight(slug: pet.slug).map { "\(Int($0))" } ?? "default"
+        DispatchQueue.global(qos: .utility).async {
+            let pack = pet.loadPack()
+            DispatchQueue.main.async { preview = pack?.previewFrame }
+        }
+    }
+
+    private func setProvider(_ provider: AgentProvider?) {
+        providerOverride = provider
+        pet.providerOverride = provider
+        controller?.refreshPet(slug: pet.slug)
+    }
+
+    private func confirmDelete() {
+        let alert = NSAlert()
+        alert.messageText = "Delete \(pet.slug)?"
+        alert.informativeText = "Removes files from disk and clears preferences."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Delete")
+        alert.addButton(withTitle: "Cancel")
+        if alert.runModal() == .alertFirstButtonReturn {
+            controller?.despawn(slug: pet.slug)
+            PetLibrary.uninstall(slug: pet.slug)
+            onChange()
+        }
     }
 }
 
@@ -365,7 +564,7 @@ private struct PetCard: View {
             Image(systemName: "arrow.left.and.right")
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
-            PlacementPickerView(placement: $placementChoice, slug: pet.slug,
+            PlacementIconPicker(placement: $placementChoice, slug: pet.slug,
                                 onRefresh: { controller?.refreshPet(slug: pet.slug) })
             Spacer()
         }
