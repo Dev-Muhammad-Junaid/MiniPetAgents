@@ -85,7 +85,7 @@ enum AgentProvider: String, CaseIterable {
         case .cursor:
             return "To install Cursor Agent, run this in Terminal:\n  curl https://cursor.com/install -fsS | bash\n\nThen add ~/.local/bin to your PATH if prompted."
         case .gemini:
-            return "To install, run this in Terminal:\n  npm install -g @google/gemini-cli"
+            return "Install Antigravity CLI (replaces Gemini CLI as of Google I/O 2026):\n  curl -fsSL https://antigravity.google/cli/install.sh | bash\n\nLegacy Gemini CLI (EOL June 18 2026):\n  npm install -g @google/gemini-cli"
         }
     }
 

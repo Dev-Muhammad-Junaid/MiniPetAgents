@@ -28,17 +28,39 @@ class GeminiSession: AgentSession {
             return
         }
 
-        ShellEnvironment.findBinary(name: "gemini", fallbackPaths: []) { [weak self] path in
+        // Antigravity CLI (agy) replaces Gemini CLI as of Google I/O 2026.
+        // Try agy first; fall back to the legacy gemini binary for users
+        // who haven't migrated yet (Gemini CLI EOL: June 18 2026).
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let agyFallbacks = [
+            "\(home)/.antigravity/bin/agy",
+            "/usr/local/bin/agy",
+            "/opt/homebrew/bin/agy"
+        ]
+
+        ShellEnvironment.findBinary(name: "agy", fallbackPaths: agyFallbacks) { [weak self] path in
             guard let self = self else { return }
-            guard let binaryPath = path else {
-                let msg = "Gemini CLI not found.\n\n\(AgentProvider.gemini.installInstructions)"
-                self.onError?(msg)
-                self.history.append(AgentMessage(role: .error, text: msg))
+
+            if let binaryPath = path {
+                Self.binaryPath = binaryPath
+                self.isRunning = true
+                self.onSessionReady?()
                 return
             }
-            Self.binaryPath = binaryPath
-            self.isRunning = true
-            self.onSessionReady?()
+
+            // agy not found — try legacy gemini binary
+            ShellEnvironment.findBinary(name: "gemini", fallbackPaths: []) { [weak self] legacyPath in
+                guard let self = self else { return }
+                guard let binaryPath = legacyPath else {
+                    let msg = "Gemini / Antigravity CLI not found.\n\n\(AgentProvider.gemini.installInstructions)"
+                    self.onError?(msg)
+                    self.history.append(AgentMessage(role: .error, text: msg))
+                    return
+                }
+                Self.binaryPath = binaryPath
+                self.isRunning = true
+                self.onSessionReady?()
+            }
         }
     }
 
