@@ -93,15 +93,19 @@ class GeminiSession: AgentSession {
 
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: binaryPath)
-        // Antigravity CLI non-interactive mode. --dangerously-skip-permissions
-        // matches the other providers so tool use doesn't stall on an approval
-        // prompt (which would hang until --print-timeout). --conversation <id>
-        // resumes this pet's own thread once its id has been captured.
-        var args = ["-p", "--dangerously-skip-permissions"]
+        // Antigravity CLI non-interactive mode. Unlike the other providers, agy
+        // is a fully autonomous agent: --dangerously-skip-permissions makes it
+        // auto-run an exploration loop (git, dotfiles, web search) on ANY prompt
+        // instead of just answering, so we deliberately omit it and let plain
+        // `agy -p` reply conversationally. IMPORTANT: -p/--print takes the prompt
+        // as its *value*, so it must come last, immediately before the message —
+        // any flag placed after -p gets swallowed as the prompt text.
+        // --conversation <id> resumes this pet's own thread once its id is known.
+        var args: [String] = []
         if let conversationId = conversationId {
             args += ["--conversation", conversationId]
         }
-        args.append(message)
+        args += ["-p", message]
         proc.arguments = args
         proc.currentDirectoryURL = FileManager.default.homeDirectoryForCurrentUser
         proc.environment = ShellEnvironment.processEnvironment()

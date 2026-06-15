@@ -1,17 +1,23 @@
 import Foundation
 import AppKit
 
-/// Wraps `npx petdex install/list` so the in-app gallery can install pets
-/// without making the user pop out to a terminal.
+/// Installs pets from petdex.dev so the in-app gallery can add pets without
+/// making the user pop out to a terminal. Installs use the petdex.dev install
+/// script (`curl -sSf https://petdex.dev/install/<slug> | sh`) directly, which
+/// bypasses the npm registry — `npx petdex` currently 403s, so the script is
+/// the reliable path.
 final class PetInstaller {
     enum InstallerError: LocalizedError {
         case missingNpx
+        case invalidSlug(String)
         case nonZeroExit(code: Int32, output: String)
 
         var errorDescription: String? {
             switch self {
             case .missingNpx:
                 return "npx not found — install Node.js from https://nodejs.org and try again"
+            case .invalidSlug(let slug):
+                return "Invalid pet name \"\(slug)\""
             case .nonZeroExit(let code, let output):
                 let tail = output.split(separator: "\n").suffix(3).joined(separator: "\n")
                 return "petdex exited with code \(code)\(tail.isEmpty ? "" : ": \(tail)")"
@@ -28,12 +34,23 @@ final class PetInstaller {
     static let shared = PetInstaller()
     private init() {}
 
-    /// Run `npx petdex install <slug>`. Streams output via `onOutput`
-    /// and calls `onComplete` on the main thread when finished.
+    /// Install a pet by running petdex.dev's install script:
+    ///   curl -sSf https://petdex.dev/install/<slug> | sh
+    /// Streams output via `onOutput` and calls `onComplete` on the main thread.
     func install(slug: String,
                  onOutput: @escaping (Progress) -> Void,
                  onComplete: @escaping (Result<Void, Error>) -> Void) {
-        runPetdex(args: ["install", slug], onOutput: onOutput) { result in
+        // The slug is interpolated into a shell pipeline, so restrict it to the
+        // characters petdex slugs actually use (letters, digits, - _ .) to rule
+        // out any shell metacharacters.
+        let allowed = CharacterSet(charactersIn:
+            "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.")
+        guard !slug.isEmpty, slug.unicodeScalars.allSatisfy(allowed.contains) else {
+            onComplete(.failure(InstallerError.invalidSlug(slug)))
+            return
+        }
+
+        runInstallScript(slug: slug, onOutput: onOutput) { result in
             switch result {
             case .success:
                 PetLibrary.shared.rescan()
@@ -63,6 +80,65 @@ final class PetInstaller {
     }
 
     // MARK: - Internal
+
+    /// Run `curl -sSf https://petdex.dev/install/<slug> | sh`, streaming output.
+    /// Fetches the install script from petdex.dev and pipes it to `sh`, mirroring
+    /// the working terminal command and avoiding the npm registry entirely.
+    private func runInstallScript(slug: String,
+                                  onOutput: @escaping (Progress) -> Void,
+                                  onComplete: @escaping (Result<Void, Error>) -> Void) {
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/bin/sh")
+        // -f makes curl fail (non-zero exit) on an HTTP error instead of piping
+        // an error page into sh; the leading `set -o pipefail` propagates a curl
+        // failure through the pipe so we surface it instead of a silent success.
+        proc.arguments = [
+            "-c",
+            "set -o pipefail; curl -fsSL 'https://petdex.dev/install/\(slug)' | sh"
+        ]
+        proc.environment = ShellEnvironment.processEnvironment()
+
+        let stdout = Pipe()
+        let stderr = Pipe()
+        proc.standardOutput = stdout
+        proc.standardError = stderr
+
+        var collectedOutput = ""
+
+        stdout.fileHandleForReading.readabilityHandler = { handle in
+            let data = handle.availableData
+            guard !data.isEmpty, let line = String(data: data, encoding: .utf8) else { return }
+            collectedOutput += line
+            DispatchQueue.main.async { onOutput(Progress(line: line, isError: false)) }
+        }
+        stderr.fileHandleForReading.readabilityHandler = { handle in
+            let data = handle.availableData
+            guard !data.isEmpty, let line = String(data: data, encoding: .utf8) else { return }
+            collectedOutput += line
+            DispatchQueue.main.async { onOutput(Progress(line: line, isError: true)) }
+        }
+
+        proc.terminationHandler = { p in
+            stdout.fileHandleForReading.readabilityHandler = nil
+            stderr.fileHandleForReading.readabilityHandler = nil
+            DispatchQueue.main.async {
+                if p.terminationStatus == 0 {
+                    onComplete(.success(()))
+                } else {
+                    onComplete(.failure(InstallerError.nonZeroExit(
+                        code: p.terminationStatus,
+                        output: collectedOutput
+                    )))
+                }
+            }
+        }
+
+        do {
+            try proc.run()
+        } catch {
+            onComplete(.failure(error))
+        }
+    }
 
     private func runPetdex(args: [String],
                            onOutput: @escaping (Progress) -> Void,
