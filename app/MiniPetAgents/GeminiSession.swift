@@ -9,6 +9,18 @@ class GeminiSession: AgentSession {
     private(set) var isBusy = false
     private static var binaryPath: String?
 
+    /// Conversation id recovered from agy's on-disk store
+    /// (~/.gemini/antigravity-cli/brain/<id>). Print mode doesn't emit the id
+    /// yet (upstream issue #7), so we diff the brain directory before/after the
+    /// first turn to learn it, then resume that exact conversation with
+    /// `--conversation <id>`. Keeps each pet's thread separate instead of
+    /// `--continue`'s global most-recent (which would cross-talk).
+    private var conversationId: String?
+    private var pendingBrainSnapshot: Set<String>?
+
+    private static let brainDir = FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent(".gemini/antigravity-cli/brain", isDirectory: true)
+
     var onText: ((String) -> Void)?
     var onError: ((String) -> Void)?
     var onToolUse: ((String, [String: Any]) -> Void)?
@@ -33,6 +45,7 @@ class GeminiSession: AgentSession {
         // who haven't migrated yet (Gemini CLI EOL: June 18 2026).
         let home = FileManager.default.homeDirectoryForCurrentUser.path
         let agyFallbacks = [
+            "\(home)/.local/bin/agy",
             "\(home)/.antigravity/bin/agy",
             "/usr/local/bin/agy",
             "/opt/homebrew/bin/agy"
@@ -66,14 +79,30 @@ class GeminiSession: AgentSession {
 
     func send(message: String) {
         guard isRunning, let binaryPath = Self.binaryPath else { return }
+        guard !isBusy else {
+            onError?("Gemini is still working on the previous message — please wait.")
+            return
+        }
         isBusy = true
         history.append(AgentMessage(role: .user, text: message))
         lineBuffer = ""
 
+        // First turn: snapshot existing conversation ids so we can identify the
+        // new folder agy creates and resume by id on later turns.
+        pendingBrainSnapshot = conversationId == nil ? Self.conversationIds() : nil
+
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: binaryPath)
-        // Gemini CLI non-interactive mode: gemini -p "<prompt>"
-        proc.arguments = ["-p", message]
+        // Antigravity CLI non-interactive mode. --dangerously-skip-permissions
+        // matches the other providers so tool use doesn't stall on an approval
+        // prompt (which would hang until --print-timeout). --conversation <id>
+        // resumes this pet's own thread once its id has been captured.
+        var args = ["-p", "--dangerously-skip-permissions"]
+        if let conversationId = conversationId {
+            args += ["--conversation", conversationId]
+        }
+        args.append(message)
+        proc.arguments = args
         proc.currentDirectoryURL = FileManager.default.homeDirectoryForCurrentUser
         proc.environment = ShellEnvironment.processEnvironment()
 
@@ -92,6 +121,12 @@ class GeminiSession: AgentSession {
                     self.onText?(tail)
                     self.lineBuffer = ""
                 }
+                // Recover this pet's conversation id from agy's brain dir so the
+                // next turn can resume it (print mode doesn't emit it directly).
+                if self.conversationId == nil, let snapshot = self.pendingBrainSnapshot {
+                    self.conversationId = Self.newConversationId(excluding: snapshot)
+                }
+                self.pendingBrainSnapshot = nil
                 if self.isBusy {
                     self.isBusy = false
                     self.onTurnComplete?()
@@ -142,6 +177,46 @@ class GeminiSession: AgentSession {
         process = nil
         isRunning = false
         isBusy = false
+        conversationId = nil
+        pendingBrainSnapshot = nil
+    }
+
+    // MARK: - Conversation id recovery
+
+    /// Folder names under agy's brain dir = existing conversation ids.
+    private static func conversationIds() -> Set<String> {
+        let fm = FileManager.default
+        guard let entries = try? fm.contentsOfDirectory(
+                at: brainDir,
+                includingPropertiesForKeys: [.isDirectoryKey],
+                options: [.skipsHiddenFiles]) else { return [] }
+        return Set(entries
+            .filter { (try? $0.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true }
+            .map { $0.lastPathComponent })
+    }
+
+    /// The newest conversation folder that didn't exist before this turn. If
+    /// several appeared (concurrent Gemini pets firing their first turn at
+    /// once), pick the most recently created — best effort, since print mode
+    /// gives us nothing to correlate a folder to a specific process.
+    private static func newConversationId(excluding prior: Set<String>) -> String? {
+        let fm = FileManager.default
+        guard let entries = try? fm.contentsOfDirectory(
+                at: brainDir,
+                includingPropertiesForKeys: [.creationDateKey, .isDirectoryKey],
+                options: [.skipsHiddenFiles]) else { return nil }
+        return entries
+            .filter {
+                ((try? $0.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true)
+                && !prior.contains($0.lastPathComponent)
+            }
+            .sorted {
+                let a = (try? $0.resourceValues(forKeys: [.creationDateKey]))?.creationDate ?? .distantPast
+                let b = (try? $1.resourceValues(forKeys: [.creationDateKey]))?.creationDate ?? .distantPast
+                return a > b
+            }
+            .first?
+            .lastPathComponent
     }
 
     // MARK: - Output parsing
