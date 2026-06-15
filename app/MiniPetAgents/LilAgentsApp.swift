@@ -66,8 +66,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             header.isEnabled = false
             menu.addItem(header)
             for (i, pet) in pets.enumerated() {
-                let isSpawned = controller?.characters.contains(where: { $0.petSlug == pet.slug }) ?? false
-                let petItem = NSMenuItem(title: pet.slug,
+                let char = controller?.characters.first(where: { $0.petSlug == pet.slug })
+                let isSpawned = char != nil
+                let provider = (pet.providerOverride ?? AgentProvider.current).displayName
+                var status = ""
+                if let char = char {
+                    if char.session?.isBusy == true { status = " · thinking…" }
+                    else if char.session != nil { status = " · active" }
+                }
+                let petItem = NSMenuItem(title: "\(pet.slug) — \(provider)\(status)",
                                          action: #selector(togglePetSpawn(_:)),
                                          keyEquivalent: i < 9 ? "\(i+1)" : "")
                 petItem.state = isSpawned ? .on : .off
@@ -115,6 +122,20 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 chatItem.representedObject = pet.slug
                 chatItem.target = self
                 sub.addItem(chatItem)
+
+                let newChatItem = NSMenuItem(title: "New Chat",
+                                             action: #selector(newChatForPet(_:)),
+                                             keyEquivalent: "")
+                newChatItem.representedObject = pet.slug
+                newChatItem.target = self
+                sub.addItem(newChatItem)
+
+                let restartItem = NSMenuItem(title: "Restart Agent",
+                                             action: #selector(restartAgent(_:)),
+                                             keyEquivalent: "")
+                restartItem.representedObject = pet.slug
+                restartItem.target = self
+                sub.addItem(restartItem)
 
                 sub.addItem(NSMenuItem.separator())
                 let sizeHeader = NSMenuItem(title: "Size on screen", action: nil, keyEquivalent: "")
@@ -297,8 +318,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Drop existing session so it rebuilds with the new provider on next chat.
         if let char = controller?.characters.first(where: { $0.petSlug == slug }) {
             char.providerOverride = pet.providerOverride
-            char.session?.terminate()
-            char.session = nil
+            char.resetSession()
             char.popoverWindow?.orderOut(nil)
             char.popoverWindow = nil
             char.terminalView = nil
@@ -329,6 +349,24 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func openChat(_ sender: NSMenuItem) {
         guard let slug = sender.representedObject as? String else { return }
         controller?.openChat(slug: slug)
+    }
+
+    @objc func newChatForPet(_ sender: NSMenuItem) {
+        guard let slug = sender.representedObject as? String,
+              let char = controller?.characters.first(where: { $0.petSlug == slug }) else { return }
+        char.startNewSession()
+        controller?.openChat(slug: slug)
+    }
+
+    /// Kill and relaunch the pet's CLI session (useful when an agent hangs).
+    @objc func restartAgent(_ sender: NSMenuItem) {
+        guard let slug = sender.representedObject as? String,
+              let char = controller?.characters.first(where: { $0.petSlug == slug }) else { return }
+        char.session?.terminate()
+        char.session = nil
+        char.ensureSession()
+        if let s = char.session { char.terminalView?.replayHistory(s.history) }
+        rebuildMenuBar()
     }
 
     @objc func showGallery() {
@@ -385,8 +423,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Clear sessions for pets with no override so they pick up the new default.
         controller?.characters.forEach { char in
             guard char.providerOverride == nil else { return }
-            char.session?.terminate()
-            char.session = nil
+            char.resetSession()
             if char.isIdleForPopover { char.closePopover() }
             char.popoverWindow?.orderOut(nil)
             char.popoverWindow = nil

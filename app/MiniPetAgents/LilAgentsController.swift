@@ -102,16 +102,13 @@ final class PetAgentsController {
     /// Send a single prompt to every spawned pet (broadcast).
     func broadcast(message: String) {
         for char in characters {
-            if char.session == nil {
-                let session = char.resolvedProvider.createSession()
-                char.session = session
-                char.session?.start()
-                // Wire is normally done on first openPopover; do it here too.
-                if let s = char.session {
-                    char.terminalView?.replayHistory(s.history)
-                }
-            }
+            // ensureSession wires callbacks + history persistence; previously
+            // broadcast created bare sessions whose output went nowhere.
+            char.ensureSession()
             char.session?.send(message: message)
+            // Sessions append the user message synchronously; refresh any
+            // open transcript so the broadcast prompt is visible.
+            char.terminalView?.replayHistory(char.session?.history ?? [])
         }
     }
 

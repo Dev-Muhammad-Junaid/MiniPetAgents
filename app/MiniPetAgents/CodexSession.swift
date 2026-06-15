@@ -7,7 +7,10 @@ class CodexSession: AgentSession {
     private var lineBuffer = ""
     private(set) var isRunning = false
     private(set) var isBusy = false
-    private var isFirstTurn = true
+    /// Thread id captured from `thread.started`; resuming by explicit id keeps
+    /// each pet's conversation separate (resume --last would cross-talk when
+    /// multiple Codex pets run at once).
+    private var threadId: String?
     private static var binaryPath: String?
 
     var onText: ((String) -> Void)?
@@ -23,7 +26,7 @@ class CodexSession: AgentSession {
     // MARK: - Lifecycle
 
     func start() {
-        if let cached = Self.binaryPath {
+        if Self.binaryPath != nil {
             isRunning = true
             onSessionReady?()
             return
@@ -51,6 +54,10 @@ class CodexSession: AgentSession {
 
     func send(message: String) {
         guard isRunning, let binaryPath = Self.binaryPath else { return }
+        guard !isBusy else {
+            onError?("Codex is still working on the previous message — please wait.")
+            return
+        }
         isBusy = true
         history.append(AgentMessage(role: .user, text: message))
         lineBuffer = ""
@@ -58,10 +65,10 @@ class CodexSession: AgentSession {
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: binaryPath)
 
-        if isFirstTurn {
-            proc.arguments = ["exec", "--json", "--full-auto", "--skip-git-repo-check", message]
+        if let threadId = threadId {
+            proc.arguments = ["exec", "resume", threadId, "--json", "--full-auto", "--skip-git-repo-check", message]
         } else {
-            proc.arguments = ["exec", "resume", "--last", "--json", "--full-auto", "--skip-git-repo-check", message]
+            proc.arguments = ["exec", "--json", "--full-auto", "--skip-git-repo-check", message]
         }
 
         proc.currentDirectoryURL = FileManager.default.homeDirectoryForCurrentUser
@@ -115,7 +122,6 @@ class CodexSession: AgentSession {
             process = proc
             outputPipe = outPipe
             errorPipe = errPipe
-            isFirstTurn = false
         } catch {
             isBusy = false
             let msg = "Failed to launch Codex CLI: \(error.localizedDescription)"
@@ -131,6 +137,7 @@ class CodexSession: AgentSession {
         process = nil
         isRunning = false
         isBusy = false
+        threadId = nil
     }
 
     // MARK: - JSONL Parsing
@@ -154,7 +161,9 @@ class CodexSession: AgentSession {
 
         switch type {
         case "thread.started":
-            break // session tracking handled by codex internally
+            if let tid = json["thread_id"] as? String, !tid.isEmpty {
+                threadId = tid
+            }
 
         case "item.started":
             if let item = json["item"] as? [String: Any] {
@@ -200,7 +209,9 @@ class CodexSession: AgentSession {
 
         case "turn.failed":
             isBusy = false
-            let msg = json["message"] as? String ?? "Turn failed"
+            let msg = (json["error"] as? [String: Any])?["message"] as? String
+                ?? json["message"] as? String
+                ?? "Turn failed"
             onError?(msg)
             history.append(AgentMessage(role: .error, text: msg))
             onTurnComplete?()

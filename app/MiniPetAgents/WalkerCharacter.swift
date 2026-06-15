@@ -694,21 +694,7 @@ class WalkerCharacter {
         showingCompletion = false
         hideBubble()
 
-        if session == nil {
-            let newSession = resolvedProvider.createSession()
-            // Restore the latest persisted session on first open.
-            if currentSessionId == nil,
-               let latest = HistoryStore.loadLatest(key: historyKey()) {
-                currentSessionId = latest.id
-                if !latest.messages.isEmpty { newSession.history = latest.messages }
-            }
-            if currentSessionId == nil {
-                currentSessionId = HistoryStore.newSessionId()
-            }
-            session = newSession
-            wireSession(newSession, providerName: resolvedProvider.displayName)
-            newSession.start()
-        }
+        ensureSession()
 
         if popoverWindow == nil { createPopoverWindow() }
 
@@ -904,10 +890,44 @@ class WalkerCharacter {
         closePopover()
     }
 
-    /// Start a fresh session, preserving current one on disk.
+    /// Create + wire a session if one doesn't exist yet. Safe to call from
+    /// anywhere (popover open, broadcast, menu actions).
+    func ensureSession() {
+        guard session == nil else { return }
+        // Restore the latest persisted session on first open.
+        if currentSessionId == nil,
+           let latest = HistoryStore.loadLatest(key: historyKey()) {
+            currentSessionId = latest.id
+            // Show past messages but start the CLI fresh (its context
+            // doesn't survive app restarts anyway).
+        }
+        if currentSessionId == nil {
+            currentSessionId = HistoryStore.newSessionId()
+        }
+        let newSession = resolvedProvider.createSession()
+        if let sid = currentSessionId {
+            newSession.history = HistoryStore.load(key: historyKey(), sessionId: sid)
+        }
+        session = newSession
+        wireSession(newSession, providerName: resolvedProvider.displayName)
+        newSession.start()
+    }
+
+    /// Drop the current session entirely (provider switch, reset, etc.).
+    func resetSession() {
+        session?.terminate()
+        session = nil
+        currentSessionId = nil
+    }
+
+    /// Start a fresh session, preserving the current one on disk. Restarts
+    /// the underlying CLI so the agent's context is truly cleared — not just
+    /// the transcript view.
     @objc func startNewSession() {
+        session?.terminate()
+        session = nil
         currentSessionId = HistoryStore.newSessionId()
-        session?.history = []
+        ensureSession()
         terminalView?.replayHistory([])
     }
 
@@ -923,23 +943,61 @@ class WalkerCharacter {
         }
 
         let menu = NSMenu()
-        let df = DateFormatter()
-        df.dateStyle = .short
-        df.timeStyle = .short
+        let df = RelativeDateTimeFormatter()
+        df.unitsStyle = .abbreviated
 
         for s in sessions {
-            let title = "\(df.string(from: s.date))  \(s.preview)"
+            let when = df.localizedString(for: s.date, relativeTo: Date())
+            let title = "\(s.preview)"
             let item = NSMenuItem(title: title, action: #selector(loadSessionFromMenuItem(_:)),
                                   keyEquivalent: "")
             item.target = self
             item.representedObject = s.id
             // Mark current session with a checkmark.
             item.state = (s.id == currentSessionId) ? .on : .off
+            let detail = NSAttributedString(
+                string: "\(title)\n\(when) · \(s.messageCount) message\(s.messageCount == 1 ? "" : "s")",
+                attributes: [.font: NSFont.menuFont(ofSize: 12)])
+            item.attributedTitle = detail
             menu.addItem(item)
         }
 
+        menu.addItem(NSMenuItem.separator())
+
+        let deleteItem = NSMenuItem(title: "Delete Current Chat",
+                                    action: #selector(deleteCurrentSession),
+                                    keyEquivalent: "")
+        deleteItem.target = self
+        menu.addItem(deleteItem)
+
+        let clearItem = NSMenuItem(title: "Clear All History…",
+                                   action: #selector(clearAllHistory),
+                                   keyEquivalent: "")
+        clearItem.target = self
+        menu.addItem(clearItem)
+
         let origin = NSPoint(x: sender.frame.minX, y: sender.frame.minY)
         menu.popUp(positioning: menu.items.first, at: origin, in: sender.superview)
+    }
+
+    @objc private func deleteCurrentSession() {
+        if let sid = currentSessionId {
+            HistoryStore.delete(key: historyKey(), sessionId: sid)
+        }
+        startNewSession()
+    }
+
+    @objc private func clearAllHistory() {
+        let alert = NSAlert()
+        alert.messageText = "Clear all chat history?"
+        alert.informativeText = "All saved conversations for \(petSlug) (\(resolvedProvider.displayName)) will be deleted. This can't be undone."
+        alert.addButton(withTitle: "Clear All")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        for s in HistoryStore.listSessions(key: historyKey()) {
+            HistoryStore.delete(key: historyKey(), sessionId: s.id)
+        }
+        startNewSession()
     }
 
     @objc private func loadSessionFromMenuItem(_ item: NSMenuItem) {
@@ -948,8 +1006,14 @@ class WalkerCharacter {
     }
 
     private func loadSession(id: String) {
+        guard id != currentSessionId else { return }
         let messages = HistoryStore.load(key: historyKey(), sessionId: id)
         currentSessionId = id
+        // Restart the CLI so a busy/old conversation doesn't keep writing
+        // into the newly loaded one.
+        session?.terminate()
+        session = nil
+        ensureSession()
         session?.history = messages
         terminalView?.replayHistory(messages)
     }

@@ -153,12 +153,28 @@ class ClaudeSession: AgentSession {
         guard let data = try? JSONSerialization.data(withJSONObject: payload),
               let jsonStr = String(data: data, encoding: .utf8),
               let lineData = (jsonStr + "\n").data(using: .utf8) else { return }
-        pipe.fileHandleForWriting.write(lineData)
+        // Writing to a dead process raises an ObjC exception; guard + try.
+        guard process?.isRunning == true else {
+            isBusy = false
+            onError?("Claude process is not running. Start a new chat to reconnect.")
+            return
+        }
+        do {
+            try pipe.fileHandleForWriting.write(contentsOf: lineData)
+        } catch {
+            isBusy = false
+            onError?("Failed to send message: \(error.localizedDescription)")
+        }
     }
 
     func terminate() {
+        outputPipe?.fileHandleForReading.readabilityHandler = nil
+        errorPipe?.fileHandleForReading.readabilityHandler = nil
         process?.terminate()
+        process = nil
+        inputPipe = nil
         isRunning = false
+        isBusy = false
     }
 
     // MARK: - NDJSON Parsing
