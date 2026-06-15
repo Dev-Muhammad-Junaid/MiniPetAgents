@@ -233,7 +233,11 @@ class WalkerCharacter {
     weak var controller: PetAgentsController?
     var themeOverride: PopoverTheme?
     var providerOverride: AgentProvider?
-    var resolvedProvider: AgentProvider { providerOverride ?? AgentProvider.current }
+    var resolvedProvider: AgentProvider {
+        let provider = providerOverride ?? AgentProvider.current
+        // Fall back to the default if a pet was pinned to a now-hidden provider.
+        return AgentProvider.selectableCases.contains(provider) ? provider : AgentProvider.current
+    }
     var isAgentBusy: Bool { session?.isBusy ?? false }
     var thinkingBubbleWindow: NSWindow?
     var clickAction: (() -> Void)?

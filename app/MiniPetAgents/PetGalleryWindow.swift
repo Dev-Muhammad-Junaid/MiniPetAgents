@@ -329,7 +329,7 @@ private struct ProviderMenuButton: NSViewRepresentable {
         btn.menu?.addItem(defaultItem)
         btn.menu?.addItem(.separator())
 
-        for p in AgentProvider.allCases {
+        for p in AgentProvider.selectableCases {
             let item = NSMenuItem(title: p.displayName, action: nil, keyEquivalent: "")
             item.image = providerIcon(p, size: 14)
             btn.menu?.addItem(item)
@@ -375,7 +375,7 @@ private struct ProviderMenuButton: NSViewRepresentable {
             let idx = sender.indexOfSelectedItem
             if idx == 0 { onSelect(nil) }
             else if idx >= ProviderMenuButton.offset {
-                onSelect(AgentProvider.allCases[idx - ProviderMenuButton.offset])
+                onSelect(AgentProvider.selectableCases[idx - ProviderMenuButton.offset])
             }
         }
     }

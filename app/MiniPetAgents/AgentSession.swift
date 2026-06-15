@@ -8,10 +8,20 @@ enum AgentProvider: String, CaseIterable {
 
     private static let defaultsKey = "selectedProvider"
 
+    /// Providers offered in the UI. Gemini/Antigravity is hidden for now: agy
+    /// is an autonomous coding agent with no chat-only mode, so it explores the
+    /// filesystem instead of replying like a pet. To bring it back, just drop
+    /// the filter below (GeminiSession is still wired up).
+    static var selectableCases: [AgentProvider] {
+        allCases.filter { $0 != .gemini }
+    }
+
     static var current: AgentProvider {
         get {
             let raw = UserDefaults.standard.string(forKey: defaultsKey) ?? "claude"
-            return AgentProvider(rawValue: raw) ?? .claude
+            let provider = AgentProvider(rawValue: raw) ?? .claude
+            // Never surface a hidden provider as the active default.
+            return selectableCases.contains(provider) ? provider : .claude
         }
         set {
             UserDefaults.standard.set(newValue.rawValue, forKey: defaultsKey)

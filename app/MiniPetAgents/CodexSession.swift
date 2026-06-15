@@ -65,10 +65,13 @@ class CodexSession: AgentSession {
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: binaryPath)
 
+        // `--full-auto` is deprecated in current Codex; `--sandbox workspace-write`
+        // is the replacement (same effect: auto-run with write access to the
+        // working dir). exec is already non-interactive, so no approval flag.
         if let threadId = threadId {
-            proc.arguments = ["exec", "resume", threadId, "--json", "--full-auto", "--skip-git-repo-check", message]
+            proc.arguments = ["exec", "resume", threadId, "--json", "--sandbox", "workspace-write", "--skip-git-repo-check", message]
         } else {
-            proc.arguments = ["exec", "--json", "--full-auto", "--skip-git-repo-check", message]
+            proc.arguments = ["exec", "--json", "--sandbox", "workspace-write", "--skip-git-repo-check", message]
         }
 
         proc.currentDirectoryURL = FileManager.default.homeDirectoryForCurrentUser

@@ -106,7 +106,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 defaultProvider.representedObject = ["slug": pet.slug, "provider": ""]
                 defaultProvider.target = self
                 sub.addItem(defaultProvider)
-                for provider in AgentProvider.allCases {
+                for provider in AgentProvider.selectableCases {
                     let mi = NSMenuItem(title: "  \(provider.displayName)",
                                         action: #selector(setProvider(_:)),
                                         keyEquivalent: "")
@@ -216,7 +216,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Default provider submenu
         let providerItem = NSMenuItem(title: "Default Provider", action: nil, keyEquivalent: "")
         let providerMenu = NSMenu()
-        for (i, provider) in AgentProvider.allCases.enumerated() {
+        for (i, provider) in AgentProvider.selectableCases.enumerated() {
             let item = NSMenuItem(title: provider.displayName,
                                   action: #selector(switchDefaultProvider(_:)),
                                   keyEquivalent: "")
@@ -412,7 +412,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc func switchDefaultProvider(_ sender: NSMenuItem) {
         let idx = sender.tag
-        let allProviders = AgentProvider.allCases
+        let allProviders = AgentProvider.selectableCases
         guard idx < allProviders.count else { return }
         AgentProvider.current = allProviders[idx]
         if let providerMenu = sender.menu {
