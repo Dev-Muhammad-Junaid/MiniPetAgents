@@ -22,6 +22,7 @@ class CodexSession: AgentSession {
     var onProcessExit: (() -> Void)?
 
     var history: [AgentMessage] = []
+    var workingDirectory: URL?
 
     // MARK: - Lifecycle
 
@@ -74,7 +75,7 @@ class CodexSession: AgentSession {
             proc.arguments = ["exec", "--json", "--sandbox", "workspace-write", "--skip-git-repo-check", message]
         }
 
-        proc.currentDirectoryURL = FileManager.default.homeDirectoryForCurrentUser
+        proc.currentDirectoryURL = workingDirectory ?? FileManager.default.homeDirectoryForCurrentUser
         proc.environment = ShellEnvironment.processEnvironment(extraPaths: [
             FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".npm-global/bin").path
         ])

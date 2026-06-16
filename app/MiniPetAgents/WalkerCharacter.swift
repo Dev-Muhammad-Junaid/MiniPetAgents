@@ -913,6 +913,9 @@ class WalkerCharacter {
             newSession.history = HistoryStore.load(key: historyKey(), sessionId: sid)
         }
         session = newSession
+        // Per-pet working directory (nil = home). cwd is fixed at launch, so a
+        // change restarts the session via the menu action below.
+        newSession.workingDirectory = PetLibrary.preferredWorkingDirectory(for: petSlug)
         wireSession(newSession, providerName: resolvedProvider.displayName)
         newSession.start()
     }

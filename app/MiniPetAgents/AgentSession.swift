@@ -132,6 +132,10 @@ protocol AgentSession: AnyObject {
     var isRunning: Bool { get }
     var isBusy: Bool { get }
     var history: [AgentMessage] { get set }
+    /// Directory the CLI runs in. nil = the user's home directory. Set before
+    /// `start()`; the CLI's cwd is fixed at launch, so changing it later
+    /// requires restarting the session.
+    var workingDirectory: URL? { get set }
 
     var onText: ((String) -> Void)? { get set }
     var onError: ((String) -> Void)? { get set }

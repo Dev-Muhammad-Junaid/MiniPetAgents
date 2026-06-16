@@ -20,6 +20,7 @@ class CopilotSession: AgentSession {
     var onProcessExit: (() -> Void)?
 
     var history: [AgentMessage] = []
+    var workingDirectory: URL?
 
     // MARK: - Lifecycle
 
@@ -71,7 +72,7 @@ class CopilotSession: AgentSession {
         args.append("--allow-all")
         proc.arguments = args
 
-        proc.currentDirectoryURL = FileManager.default.homeDirectoryForCurrentUser
+        proc.currentDirectoryURL = workingDirectory ?? FileManager.default.homeDirectoryForCurrentUser
         proc.environment = ShellEnvironment.processEnvironment(extraPaths: [
             FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".npm-global/bin").path
         ])

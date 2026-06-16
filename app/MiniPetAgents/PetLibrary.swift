@@ -17,6 +17,11 @@ final class InstalledPet {
         get { PetLibrary.preferredProvider(for: slug) }
         set { PetLibrary.setPreferredProvider(newValue, for: slug) }
     }
+    /// Directory this pet's CLI runs in. nil = the user's home directory.
+    var workingDirectory: URL? {
+        get { PetLibrary.preferredWorkingDirectory(for: slug) }
+        set { PetLibrary.setPreferredWorkingDirectory(newValue, for: slug) }
+    }
     /// Spawn state — does the user currently want this pet on screen?
     var isSpawned: Bool {
         get { PetLibrary.isSpawned(slug: slug) }
@@ -182,6 +187,22 @@ final class PetLibrary {
         }
     }
 
+    private static func workingDirKey(_ slug: String) -> String { "pet.\(slug).workingDir" }
+
+    /// Per-pet working directory the CLI runs in. nil = home directory.
+    static func preferredWorkingDirectory(for slug: String) -> URL? {
+        guard let path = UserDefaults.standard.string(forKey: workingDirKey(slug)),
+              !path.isEmpty else { return nil }
+        return URL(fileURLWithPath: path, isDirectory: true)
+    }
+    static func setPreferredWorkingDirectory(_ url: URL?, for slug: String) {
+        if let url = url {
+            UserDefaults.standard.set(url.path, forKey: workingDirKey(slug))
+        } else {
+            UserDefaults.standard.removeObject(forKey: workingDirKey(slug))
+        }
+    }
+
     static func isSpawned(slug: String) -> Bool {
         UserDefaults.standard.object(forKey: spawnedKey(slug)) as? Bool ?? false
     }
@@ -335,7 +356,7 @@ final class PetLibrary {
         "placement", "provider", "spawned",
         "displayHeight", "pinnedScreenOrigin",
         "movementMode", "walkSpeed",
-        "popoverSize",
+        "popoverSize", "workingDir",
         // Legacy keys still pruned so old installs clean up:
         "idleWander", "pauseWhileTalking", "roamRegion", "edge"
     ]

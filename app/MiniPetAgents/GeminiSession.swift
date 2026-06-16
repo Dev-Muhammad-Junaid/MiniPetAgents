@@ -30,6 +30,7 @@ class GeminiSession: AgentSession {
     var onProcessExit: (() -> Void)?
 
     var history: [AgentMessage] = []
+    var workingDirectory: URL?
 
     // MARK: - Lifecycle
 
@@ -107,7 +108,7 @@ class GeminiSession: AgentSession {
         }
         args += ["-p", message]
         proc.arguments = args
-        proc.currentDirectoryURL = FileManager.default.homeDirectoryForCurrentUser
+        proc.currentDirectoryURL = workingDirectory ?? FileManager.default.homeDirectoryForCurrentUser
         proc.environment = ShellEnvironment.processEnvironment()
 
         let outPipe = Pipe()

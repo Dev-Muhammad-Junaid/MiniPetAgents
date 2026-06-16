@@ -21,6 +21,7 @@ class CursorSession: AgentSession {
     var onProcessExit: (() -> Void)?
 
     var history: [AgentMessage] = []
+    var workingDirectory: URL?
 
     // MARK: - Lifecycle
 
@@ -85,7 +86,7 @@ class CursorSession: AgentSession {
         }
         args.append(message)
         proc.arguments = args
-        proc.currentDirectoryURL = FileManager.default.homeDirectoryForCurrentUser
+        proc.currentDirectoryURL = workingDirectory ?? FileManager.default.homeDirectoryForCurrentUser
         proc.environment = ShellEnvironment.processEnvironment()
 
         let outPipe = Pipe()

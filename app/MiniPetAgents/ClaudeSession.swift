@@ -19,6 +19,7 @@ class ClaudeSession: AgentSession {
     var onProcessExit: (() -> Void)?
 
     var history: [AgentMessage] = []   // satisfies { get set } protocol requirement
+    var workingDirectory: URL?
 
     // MARK: - Process Lifecycle
 
@@ -57,7 +58,7 @@ class ClaudeSession: AgentSession {
             "--verbose",
             "--dangerously-skip-permissions"
         ]
-        proc.currentDirectoryURL = FileManager.default.homeDirectoryForCurrentUser
+        proc.currentDirectoryURL = workingDirectory ?? FileManager.default.homeDirectoryForCurrentUser
         proc.environment = ShellEnvironment.processEnvironment()
 
         let inPipe = Pipe()

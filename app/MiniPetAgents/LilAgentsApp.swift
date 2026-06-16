@@ -138,6 +138,33 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 sub.addItem(restartItem)
 
                 sub.addItem(NSMenuItem.separator())
+                let wdHeader = NSMenuItem(title: "Working Directory", action: nil, keyEquivalent: "")
+                wdHeader.isEnabled = false
+                sub.addItem(wdHeader)
+
+                let homeWDItem = NSMenuItem(title: "  Home (default)",
+                                            action: #selector(clearWorkingDirectory(_:)),
+                                            keyEquivalent: "")
+                homeWDItem.representedObject = pet.slug
+                homeWDItem.target = self
+                homeWDItem.state = pet.workingDirectory == nil ? .on : .off
+                sub.addItem(homeWDItem)
+
+                if let wd = pet.workingDirectory {
+                    let currentWDItem = NSMenuItem(title: "  \(wd.lastPathComponent)",
+                                                   action: nil, keyEquivalent: "")
+                    currentWDItem.state = .on
+                    currentWDItem.toolTip = wd.path
+                    currentWDItem.isEnabled = false
+                    sub.addItem(currentWDItem)
+                }
+
+                let setWDItem = NSMenuItem(title: "  Set Folder…",
+                                           action: #selector(setWorkingDirectory(_:)),
+                                           keyEquivalent: "")
+                setWDItem.representedObject = pet.slug
+                setWDItem.target = self
+                sub.addItem(setWDItem)
                 let sizeHeader = NSMenuItem(title: "Size on screen", action: nil, keyEquivalent: "")
                 sizeHeader.isEnabled = false
                 sub.addItem(sizeHeader)
@@ -367,6 +394,44 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         char.ensureSession()
         if let s = char.session { char.terminalView?.replayHistory(s.history) }
         rebuildMenuBar()
+    }
+
+    /// Pick the folder this pet's CLI runs in.
+    @objc func setWorkingDirectory(_ sender: NSMenuItem) {
+        guard let slug = sender.representedObject as? String,
+              let pet = PetLibrary.shared.pet(slug: slug) else { return }
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Use Folder"
+        panel.message = "Choose the working directory for \(slug)"
+        panel.directoryURL = pet.workingDirectory ?? FileManager.default.homeDirectoryForCurrentUser
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        pet.workingDirectory = url
+        restartSessionAfterWorkingDirChange(slug: slug)
+        rebuildMenuBar()
+    }
+
+    /// Reset this pet back to running in the home directory.
+    @objc func clearWorkingDirectory(_ sender: NSMenuItem) {
+        guard let slug = sender.representedObject as? String,
+              let pet = PetLibrary.shared.pet(slug: slug) else { return }
+        guard pet.workingDirectory != nil else { return }
+        pet.workingDirectory = nil
+        restartSessionAfterWorkingDirChange(slug: slug)
+        rebuildMenuBar()
+    }
+
+    /// The CLI's cwd is fixed at launch, so restart the session to apply a new
+    /// working directory. The transcript view is preserved; the agent's
+    /// in-conversation context restarts (same as Restart Agent).
+    private func restartSessionAfterWorkingDirChange(slug: String) {
+        guard let char = controller?.characters.first(where: { $0.petSlug == slug }) else { return }
+        char.session?.terminate()
+        char.session = nil
+        char.ensureSession()
+        if let s = char.session { char.terminalView?.replayHistory(s.history) }
     }
 
     @objc func showGallery() {
