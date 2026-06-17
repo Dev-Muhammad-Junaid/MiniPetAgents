@@ -19,9 +19,11 @@ class CursorSession: AgentSession {
     var onSessionReady: (() -> Void)?
     var onTurnComplete: (() -> Void)?
     var onProcessExit: (() -> Void)?
+    var onUsage: ((String) -> Void)?
 
     var history: [AgentMessage] = []
     var workingDirectory: URL?
+    var model: String?
 
     // MARK: - Lifecycle
 
@@ -84,6 +86,7 @@ class CursorSession: AgentSession {
         if let chatId = chatId {
             args += ["--resume", chatId]
         }
+        if let model = model { args += ["--model", model] }
         args.append(message)
         proc.arguments = args
         proc.currentDirectoryURL = workingDirectory ?? FileManager.default.homeDirectoryForCurrentUser
@@ -150,6 +153,19 @@ class CursorSession: AgentSession {
             onError?(msg)
             history.append(AgentMessage(role: .error, text: msg))
         }
+    }
+
+    func interrupt() {
+        guard isBusy, let proc = process else { return }
+        // Detach handlers so the kill doesn't fire onTurnComplete; the captured
+        // chatId is kept so the next message resumes this conversation.
+        proc.terminationHandler = nil
+        outputPipe?.fileHandleForReading.readabilityHandler = nil
+        errorPipe?.fileHandleForReading.readabilityHandler = nil
+        proc.terminate()
+        process = nil
+        lineBuffer = ""
+        isBusy = false
     }
 
     func terminate() {
@@ -229,6 +245,13 @@ class CursorSession: AgentSession {
             if let resultText = json["result"] as? String, !resultText.isEmpty,
                history.last?.text != resultText {
                 history.append(AgentMessage(role: .assistant, text: resultText))
+            }
+            if let usage = json["usage"] as? [String: Any],
+               let note = formatUsageNote(
+                    inputTokens: usage["input_tokens"] as? Int ?? usage["inputTokens"] as? Int,
+                    outputTokens: usage["output_tokens"] as? Int ?? usage["outputTokens"] as? Int,
+                    costUSD: json["total_cost_usd"] as? Double) {
+                onUsage?(note)
             }
             onTurnComplete?()
 

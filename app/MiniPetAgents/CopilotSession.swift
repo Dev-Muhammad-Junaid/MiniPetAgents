@@ -18,9 +18,11 @@ class CopilotSession: AgentSession {
     var onSessionReady: (() -> Void)?
     var onTurnComplete: (() -> Void)?
     var onProcessExit: (() -> Void)?
+    var onUsage: ((String) -> Void)?
 
     var history: [AgentMessage] = []
     var workingDirectory: URL?
+    var model: String?
 
     // MARK: - Lifecycle
 
@@ -70,6 +72,7 @@ class CopilotSession: AgentSession {
             args.append("-s")
         }
         args.append("--allow-all")
+        if let model = model { args += ["--model", model] }
         proc.arguments = args
 
         proc.currentDirectoryURL = workingDirectory ?? FileManager.default.homeDirectoryForCurrentUser
@@ -145,6 +148,19 @@ class CopilotSession: AgentSession {
             onError?(msg)
             history.append(AgentMessage(role: .error, text: msg))
         }
+    }
+
+    func interrupt() {
+        guard isBusy, let proc = process else { return }
+        // Detach handlers so the kill doesn't fire onTurnComplete; conversation
+        // continuity state is left intact so the next message keeps context.
+        proc.terminationHandler = nil
+        outputPipe?.fileHandleForReading.readabilityHandler = nil
+        errorPipe?.fileHandleForReading.readabilityHandler = nil
+        proc.terminate()
+        process = nil
+        lineBuffer = ""
+        isBusy = false
     }
 
     func terminate() {

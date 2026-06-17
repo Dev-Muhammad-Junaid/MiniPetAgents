@@ -126,6 +126,26 @@ struct AgentMessage: Codable {
     let text: String
 }
 
+// MARK: - Usage formatting
+
+/// Build a compact "↑in ↓out tok · $cost" line from whatever a provider reports.
+/// Returns nil when there's nothing useful to show.
+func formatUsageNote(inputTokens: Int?, outputTokens: Int?, costUSD: Double?) -> String? {
+    var parts: [String] = []
+    if let i = inputTokens, let o = outputTokens {
+        parts.append("↑\(i) ↓\(o) tok")
+    } else if let o = outputTokens {
+        parts.append("↓\(o) tok")
+    } else if let i = inputTokens {
+        parts.append("↑\(i) tok")
+    }
+    if let c = costUSD, c > 0 {
+        parts.append(String(format: "$%.4f", c))
+    }
+    guard !parts.isEmpty else { return nil }
+    return "  " + parts.joined(separator: " · ")
+}
+
 // MARK: - Session Protocol
 
 protocol AgentSession: AnyObject {
@@ -136,6 +156,8 @@ protocol AgentSession: AnyObject {
     /// `start()`; the CLI's cwd is fixed at launch, so changing it later
     /// requires restarting the session.
     var workingDirectory: URL? { get set }
+    /// Model passed to the CLI via --model. nil = the provider's default.
+    var model: String? { get set }
 
     var onText: ((String) -> Void)? { get set }
     var onError: ((String) -> Void)? { get set }
@@ -144,10 +166,16 @@ protocol AgentSession: AnyObject {
     var onSessionReady: (() -> Void)? { get set }
     var onTurnComplete: (() -> Void)? { get set }
     var onProcessExit: (() -> Void)? { get set }
+    /// Per-turn usage line (tokens / cost) when the provider reports it.
+    var onUsage: ((String) -> Void)? { get set }
 
     func start()
     func send(message: String)
     func send(message: String, attachments: [ChatAttachment])
+    /// Cancel the in-flight turn (if any) without discarding the conversation.
+    /// One-shot providers keep their resume id; the persistent Claude session
+    /// restarts its process (its in-CLI context resets).
+    func interrupt()
     func terminate()
 }
 

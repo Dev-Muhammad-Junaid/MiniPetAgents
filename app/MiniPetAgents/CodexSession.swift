@@ -20,9 +20,11 @@ class CodexSession: AgentSession {
     var onSessionReady: (() -> Void)?
     var onTurnComplete: (() -> Void)?
     var onProcessExit: (() -> Void)?
+    var onUsage: ((String) -> Void)?
 
     var history: [AgentMessage] = []
     var workingDirectory: URL?
+    var model: String?
 
     // MARK: - Lifecycle
 
@@ -69,11 +71,15 @@ class CodexSession: AgentSession {
         // `--full-auto` is deprecated in current Codex; `--sandbox workspace-write`
         // is the replacement (same effect: auto-run with write access to the
         // working dir). exec is already non-interactive, so no approval flag.
+        var args: [String]
         if let threadId = threadId {
-            proc.arguments = ["exec", "resume", threadId, "--json", "--sandbox", "workspace-write", "--skip-git-repo-check", message]
+            args = ["exec", "resume", threadId, "--json", "--sandbox", "workspace-write", "--skip-git-repo-check"]
         } else {
-            proc.arguments = ["exec", "--json", "--sandbox", "workspace-write", "--skip-git-repo-check", message]
+            args = ["exec", "--json", "--sandbox", "workspace-write", "--skip-git-repo-check"]
         }
+        if let model = model { args += ["--model", model] }
+        args.append(message)
+        proc.arguments = args
 
         proc.currentDirectoryURL = workingDirectory ?? FileManager.default.homeDirectoryForCurrentUser
         proc.environment = ShellEnvironment.processEnvironment(extraPaths: [
@@ -132,6 +138,19 @@ class CodexSession: AgentSession {
             onError?(msg)
             history.append(AgentMessage(role: .error, text: msg))
         }
+    }
+
+    func interrupt() {
+        guard isBusy, let proc = process else { return }
+        // Detach handlers so the kill doesn't fire onTurnComplete; the captured
+        // threadId is kept so the next message resumes this conversation.
+        proc.terminationHandler = nil
+        outputPipe?.fileHandleForReading.readabilityHandler = nil
+        errorPipe?.fileHandleForReading.readabilityHandler = nil
+        proc.terminate()
+        process = nil
+        lineBuffer = ""
+        isBusy = false
     }
 
     func terminate() {
@@ -209,6 +228,12 @@ class CodexSession: AgentSession {
 
         case "turn.completed":
             isBusy = false
+            if let usage = json["usage"] as? [String: Any],
+               let note = formatUsageNote(inputTokens: usage["input_tokens"] as? Int,
+                                          outputTokens: usage["output_tokens"] as? Int,
+                                          costUSD: nil) {
+                onUsage?(note)
+            }
             onTurnComplete?()
 
         case "turn.failed":

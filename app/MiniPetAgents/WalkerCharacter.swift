@@ -226,6 +226,9 @@ class WalkerCharacter {
     var isIdleForPopover = false
     var popoverWindow: NSWindow?
     var terminalView: TerminalView?
+    weak var stopButton: NSButton?
+    weak var workingDirButton: NSButton?
+    weak var chatTitleLabel: NSTextField?
     var session: (any AgentSession)?
     var clickOutsideMonitor: Any?
     var escapeKeyMonitor: Any?
@@ -814,14 +817,45 @@ class WalkerCharacter {
         }
         titleBar.addSubview(iconView)
 
-        let titleString = "\(petSlug.isEmpty ? "pet" : petSlug) · \(t.titleString(for: provider))"
-        let titleLabel = NSTextField(labelWithString: titleString)
+        let titleLabel = NSTextField(labelWithString: chatTitleString(theme: t, provider: provider))
+        chatTitleLabel = titleLabel
         titleLabel.font = t.titleFont
         titleLabel.textColor = t.titleText
-        // Leave 52px on the right for the two action buttons.
-        titleLabel.frame = NSRect(x: 50, y: 6, width: popoverWidth - 114, height: 16)
+        // Leave room on the right for the stop / history / new-chat buttons.
+        titleLabel.frame = NSRect(x: 50, y: 6, width: popoverWidth - 138, height: 16)
         titleLabel.autoresizingMask = [.width]
         titleBar.addSubview(titleLabel)
+
+        // Working-directory button — shows/changes the folder the CLI runs in.
+        let wdBtn = NSButton(frame: NSRect(x: popoverWidth - 102, y: 5, width: 22, height: 18))
+        wdBtn.bezelStyle = .inline
+        wdBtn.isBordered = false
+        wdBtn.title = ""
+        if let img = NSImage(systemSymbolName: "folder", accessibilityDescription: "Working directory") {
+            wdBtn.image = img.withSymbolConfiguration(.init(pointSize: 10, weight: .regular))
+        }
+        wdBtn.contentTintColor = t.titleText.withAlphaComponent(0.6)
+        wdBtn.target = self
+        wdBtn.action = #selector(showWorkingDirMenu(_:))
+        titleBar.addSubview(wdBtn)
+        workingDirButton = wdBtn
+        updateWorkingDirButtonTooltip()
+
+        // Stop button — interrupts a running turn. Hidden unless the agent is busy.
+        let stopBtn = NSButton(frame: NSRect(x: popoverWidth - 78, y: 5, width: 22, height: 18))
+        stopBtn.bezelStyle = .inline
+        stopBtn.isBordered = false
+        stopBtn.title = ""
+        if let img = NSImage(systemSymbolName: "stop.fill", accessibilityDescription: "Stop") {
+            stopBtn.image = img.withSymbolConfiguration(.init(pointSize: 10, weight: .regular))
+        }
+        stopBtn.contentTintColor = t.errorColor
+        stopBtn.toolTip = "Stop the current response"
+        stopBtn.target = self
+        stopBtn.action = #selector(stopCurrentTurn)
+        stopBtn.isHidden = !(session?.isBusy ?? false)
+        titleBar.addSubview(stopBtn)
+        stopButton = stopBtn
 
         // Sessions list button — shows past conversations.
         let sessionsBtn = NSButton(frame: NSRect(x: popoverWidth - 54, y: 5, width: 22, height: 18))
@@ -869,6 +903,7 @@ class WalkerCharacter {
         terminal.autoresizingMask = [.width, .height]
         terminal.onSendMessage = { [weak self] message, attachments in
             self?.session?.send(message: message, attachments: attachments)
+            self?.setStopButtonVisible(true)
         }
         container.addSubview(terminal)
 
@@ -916,6 +951,7 @@ class WalkerCharacter {
         // Per-pet working directory (nil = home). cwd is fixed at launch, so a
         // change restarts the session via the menu action below.
         newSession.workingDirectory = PetLibrary.preferredWorkingDirectory(for: petSlug)
+        newSession.model = PetLibrary.preferredModel(for: petSlug)
         wireSession(newSession, providerName: resolvedProvider.displayName)
         newSession.start()
     }
@@ -1039,6 +1075,7 @@ class WalkerCharacter {
             self?.setSpriteState(.review, source: .session)
         }
         session.onTurnComplete = { [weak self] in
+            self?.setStopButtonVisible(false)
             self?.terminalView?.endStreaming()
             self?.playCompletionSound()
             self?.showCompletionBubble()
@@ -1053,6 +1090,7 @@ class WalkerCharacter {
             }
         }
         session.onError = { [weak self] text in
+            self?.setStopButtonVisible(false)
             self?.terminalView?.appendError(text)
             self?.setSpriteState(.failed, source: .session)
         }
@@ -1065,11 +1103,113 @@ class WalkerCharacter {
         session.onToolResult = { [weak self] summary, isError in
             self?.terminalView?.appendToolResult(summary: summary, isError: isError)
         }
+        session.onUsage = { [weak self] note in
+            self?.terminalView?.appendSystemNote(note)
+        }
         session.onProcessExit = { [weak self] in
+            self?.setStopButtonVisible(false)
             self?.terminalView?.endStreaming()
             self?.terminalView?.appendError("\(providerName) session ended.")
             self?.setSpriteState(.idle, source: .session)
         }
+    }
+
+    private func setStopButtonVisible(_ visible: Bool) {
+        stopButton?.isHidden = !visible
+    }
+
+    /// Cancel the in-flight turn. Keeps the conversation; the transcript stays.
+    @objc func stopCurrentTurn() {
+        guard let session = session, session.isBusy else {
+            setStopButtonVisible(false)
+            return
+        }
+        session.interrupt()
+        setStopButtonVisible(false)
+        terminalView?.appendSystemNote("⏹ Stopped.")
+        setSpriteState(.idle, source: .session)
+        // Persist whatever was captured before the stop.
+        if let sid = currentSessionId {
+            HistoryStore.save(key: historyKey(), sessionId: sid, messages: session.history)
+        }
+    }
+
+    // MARK: - Working directory (chat title-bar control)
+
+    private func updateWorkingDirButtonTooltip() {
+        let wd = PetLibrary.preferredWorkingDirectory(for: petSlug)
+        workingDirButton?.toolTip = "Working directory: \(wd?.path ?? "Home (default)")"
+    }
+
+    @objc func showWorkingDirMenu(_ sender: NSButton) {
+        let current = PetLibrary.preferredWorkingDirectory(for: petSlug)
+        let menu = NSMenu()
+        let header = NSMenuItem(title: current.map { "📁 \($0.path)" } ?? "📁 Home (default)",
+                                action: nil, keyEquivalent: "")
+        header.isEnabled = false
+        menu.addItem(header)
+        menu.addItem(.separator())
+
+        let setItem = NSMenuItem(title: "Set Folder…", action: #selector(pickWorkingDir), keyEquivalent: "")
+        setItem.target = self
+        menu.addItem(setItem)
+
+        if current != nil {
+            let openItem = NSMenuItem(title: "Open in Finder", action: #selector(openWorkingDirInFinder), keyEquivalent: "")
+            openItem.target = self
+            menu.addItem(openItem)
+            let homeItem = NSMenuItem(title: "Use Home (default)", action: #selector(useHomeWorkingDir), keyEquivalent: "")
+            homeItem.target = self
+            menu.addItem(homeItem)
+        }
+
+        let origin = NSPoint(x: sender.frame.minX, y: sender.frame.minY)
+        menu.popUp(positioning: menu.items.first, at: origin, in: sender.superview)
+    }
+
+    @objc func pickWorkingDir() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Use Folder"
+        panel.message = "Choose the working directory for \(petSlug)"
+        panel.directoryURL = PetLibrary.preferredWorkingDirectory(for: petSlug)
+            ?? FileManager.default.homeDirectoryForCurrentUser
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        PetLibrary.setPreferredWorkingDirectory(url, for: petSlug)
+        applyWorkingDirChange()
+    }
+
+    @objc func useHomeWorkingDir() {
+        PetLibrary.setPreferredWorkingDirectory(nil, for: petSlug)
+        applyWorkingDirChange()
+    }
+
+    @objc func openWorkingDirInFinder() {
+        let url = PetLibrary.preferredWorkingDirectory(for: petSlug)
+            ?? FileManager.default.homeDirectoryForCurrentUser
+        NSWorkspace.shared.open(url)
+    }
+
+    /// The CLI's cwd is fixed at launch, so restart the session to apply a new
+    /// folder. Transcript is preserved; the agent's in-conversation context restarts.
+    private func applyWorkingDirChange() {
+        session?.terminate()
+        session = nil
+        ensureSession()
+        if let s = session { terminalView?.replayHistory(s.history) }
+        updateWorkingDirButtonTooltip()
+        chatTitleLabel?.stringValue = chatTitleString(theme: resolvedTheme, provider: resolvedProvider)
+    }
+
+    /// Title-bar text: "slug · Provider" plus the working folder when set.
+    private func chatTitleString(theme t: PopoverTheme, provider: AgentProvider) -> String {
+        var s = "\(petSlug.isEmpty ? "pet" : petSlug) · \(t.titleString(for: provider))"
+        if let wd = PetLibrary.preferredWorkingDirectory(for: petSlug) {
+            s += " · 📁 \(wd.lastPathComponent)"
+        }
+        return s
     }
 
     private func formatToolInput(_ input: [String: Any]) -> String {

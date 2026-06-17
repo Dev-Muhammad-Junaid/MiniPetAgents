@@ -17,9 +17,11 @@ class ClaudeSession: AgentSession {
     var onSessionReady: (() -> Void)?
     var onTurnComplete: (() -> Void)?
     var onProcessExit: (() -> Void)?
+    var onUsage: ((String) -> Void)?
 
     var history: [AgentMessage] = []   // satisfies { get set } protocol requirement
     var workingDirectory: URL?
+    var model: String?
 
     // MARK: - Process Lifecycle
 
@@ -51,13 +53,15 @@ class ClaudeSession: AgentSession {
     private func launchProcess(binaryPath: String) {
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: binaryPath)
-        proc.arguments = [
+        var args = [
             "-p",
             "--output-format", "stream-json",
             "--input-format", "stream-json",
             "--verbose",
             "--dangerously-skip-permissions"
         ]
+        if let model = model { args += ["--model", model] }
+        proc.arguments = args
         proc.currentDirectoryURL = workingDirectory ?? FileManager.default.homeDirectoryForCurrentUser
         proc.environment = ShellEnvironment.processEnvironment()
 
@@ -168,6 +172,26 @@ class ClaudeSession: AgentSession {
         }
     }
 
+    func interrupt() {
+        guard isBusy else { return }
+        // stream-json input mode has no per-turn cancel, so restart the process.
+        // The in-CLI context resets; the transcript is preserved by the caller.
+        if let proc = process {
+            proc.terminationHandler = nil
+            outputPipe?.fileHandleForReading.readabilityHandler = nil
+            errorPipe?.fileHandleForReading.readabilityHandler = nil
+            proc.terminate()
+        }
+        process = nil
+        inputPipe = nil
+        lineBuffer = ""
+        isBusy = false
+        isRunning = false
+        if let path = Self.binaryPath {
+            launchProcess(binaryPath: path)   // fresh pipes; keeps workingDirectory
+        }
+    }
+
     func terminate() {
         outputPipe?.fileHandleForReading.readabilityHandler = nil
         errorPipe?.fileHandleForReading.readabilityHandler = nil
@@ -261,6 +285,12 @@ class ClaudeSession: AgentSession {
                 } else {
                     history.append(AgentMessage(role: .assistant, text: result))
                 }
+            }
+            let usage = json["usage"] as? [String: Any]
+            if let note = formatUsageNote(inputTokens: usage?["input_tokens"] as? Int,
+                                          outputTokens: usage?["output_tokens"] as? Int,
+                                          costUSD: json["total_cost_usd"] as? Double) {
+                onUsage?(note)
             }
             onTurnComplete?()
 

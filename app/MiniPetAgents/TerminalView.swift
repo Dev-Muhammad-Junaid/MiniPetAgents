@@ -351,6 +351,17 @@ class TerminalView: NSView {
         scrollToBottom()
     }
 
+    /// A dim, non-error system note (e.g. "Stopped").
+    func appendSystemNote(_ text: String) {
+        let t = theme
+        endStreaming()
+        ensureNewline()
+        textView.textStorage?.append(NSAttributedString(string: text + "\n", attributes: [
+            .font: t.font, .foregroundColor: t.textDim
+        ]))
+        scrollToBottom()
+    }
+
     func appendToolUse(toolName: String, summary: String) {
         let t = theme
         endStreaming()

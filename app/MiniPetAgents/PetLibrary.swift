@@ -22,6 +22,11 @@ final class InstalledPet {
         get { PetLibrary.preferredWorkingDirectory(for: slug) }
         set { PetLibrary.setPreferredWorkingDirectory(newValue, for: slug) }
     }
+    /// Model passed to the CLI via --model. nil = the provider's default.
+    var model: String? {
+        get { PetLibrary.preferredModel(for: slug) }
+        set { PetLibrary.setPreferredModel(newValue, for: slug) }
+    }
     /// Spawn state — does the user currently want this pet on screen?
     var isSpawned: Bool {
         get { PetLibrary.isSpawned(slug: slug) }
@@ -203,6 +208,21 @@ final class PetLibrary {
         }
     }
 
+    private static func modelKey(_ slug: String) -> String { "pet.\(slug).model" }
+
+    /// Per-pet model name passed via --model. nil = provider default.
+    static func preferredModel(for slug: String) -> String? {
+        let v = UserDefaults.standard.string(forKey: modelKey(slug))
+        return (v?.isEmpty == false) ? v : nil
+    }
+    static func setPreferredModel(_ model: String?, for slug: String) {
+        if let model = model, !model.isEmpty {
+            UserDefaults.standard.set(model, forKey: modelKey(slug))
+        } else {
+            UserDefaults.standard.removeObject(forKey: modelKey(slug))
+        }
+    }
+
     static func isSpawned(slug: String) -> Bool {
         UserDefaults.standard.object(forKey: spawnedKey(slug)) as? Bool ?? false
     }
@@ -356,7 +376,7 @@ final class PetLibrary {
         "placement", "provider", "spawned",
         "displayHeight", "pinnedScreenOrigin",
         "movementMode", "walkSpeed",
-        "popoverSize", "workingDir",
+        "popoverSize", "workingDir", "model",
         // Legacy keys still pruned so old installs clean up:
         "idleWander", "pauseWhileTalking", "roamRegion", "edge"
     ]

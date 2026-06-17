@@ -165,6 +165,35 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 setWDItem.representedObject = pet.slug
                 setWDItem.target = self
                 sub.addItem(setWDItem)
+
+                sub.addItem(NSMenuItem.separator())
+                let modelHeader = NSMenuItem(title: "Model", action: nil, keyEquivalent: "")
+                modelHeader.isEnabled = false
+                sub.addItem(modelHeader)
+
+                let defaultModelItem = NSMenuItem(title: "  Provider default",
+                                                  action: #selector(clearModel(_:)),
+                                                  keyEquivalent: "")
+                defaultModelItem.representedObject = pet.slug
+                defaultModelItem.target = self
+                defaultModelItem.state = pet.model == nil ? .on : .off
+                sub.addItem(defaultModelItem)
+
+                if let model = pet.model {
+                    let currentModelItem = NSMenuItem(title: "  \(model)", action: nil, keyEquivalent: "")
+                    currentModelItem.state = .on
+                    currentModelItem.isEnabled = false
+                    sub.addItem(currentModelItem)
+                }
+
+                let setModelItem = NSMenuItem(title: "  Set Model…",
+                                              action: #selector(setModel(_:)),
+                                              keyEquivalent: "")
+                setModelItem.representedObject = pet.slug
+                setModelItem.target = self
+                sub.addItem(setModelItem)
+
+                sub.addItem(NSMenuItem.separator())
                 let sizeHeader = NSMenuItem(title: "Size on screen", action: nil, keyEquivalent: "")
                 sizeHeader.isEnabled = false
                 sub.addItem(sizeHeader)
@@ -409,7 +438,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         panel.directoryURL = pet.workingDirectory ?? FileManager.default.homeDirectoryForCurrentUser
         guard panel.runModal() == .OK, let url = panel.url else { return }
         pet.workingDirectory = url
-        restartSessionAfterWorkingDirChange(slug: slug)
+        restartPetSession(slug: slug)
         rebuildMenuBar()
     }
 
@@ -419,19 +448,49 @@ class AppDelegate: NSObject, NSApplicationDelegate {
               let pet = PetLibrary.shared.pet(slug: slug) else { return }
         guard pet.workingDirectory != nil else { return }
         pet.workingDirectory = nil
-        restartSessionAfterWorkingDirChange(slug: slug)
+        restartPetSession(slug: slug)
         rebuildMenuBar()
     }
 
-    /// The CLI's cwd is fixed at launch, so restart the session to apply a new
-    /// working directory. The transcript view is preserved; the agent's
+    /// Restart the pet's session so a launch-time change (working directory or
+    /// model) takes effect. The transcript view is preserved; the agent's
     /// in-conversation context restarts (same as Restart Agent).
-    private func restartSessionAfterWorkingDirChange(slug: String) {
+    private func restartPetSession(slug: String) {
         guard let char = controller?.characters.first(where: { $0.petSlug == slug }) else { return }
         char.session?.terminate()
         char.session = nil
         char.ensureSession()
         if let s = char.session { char.terminalView?.replayHistory(s.history) }
+    }
+
+    /// Prompt for a model name for this pet (blank = provider default).
+    @objc func setModel(_ sender: NSMenuItem) {
+        guard let slug = sender.representedObject as? String,
+              let pet = PetLibrary.shared.pet(slug: slug) else { return }
+        let alert = NSAlert()
+        alert.messageText = "Model for \(slug)"
+        alert.informativeText = "Enter a model name for this provider (e.g. a Claude, Codex, or Cursor model). Leave blank to use the provider's default."
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
+        field.stringValue = pet.model ?? ""
+        field.placeholderString = "provider default"
+        alert.accessoryView = field
+        alert.addButton(withTitle: "Save")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let value = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        pet.model = value.isEmpty ? nil : value
+        restartPetSession(slug: slug)
+        rebuildMenuBar()
+    }
+
+    /// Reset this pet back to the provider's default model.
+    @objc func clearModel(_ sender: NSMenuItem) {
+        guard let slug = sender.representedObject as? String,
+              let pet = PetLibrary.shared.pet(slug: slug) else { return }
+        guard pet.model != nil else { return }
+        pet.model = nil
+        restartPetSession(slug: slug)
+        rebuildMenuBar()
     }
 
     @objc func showGallery() {
