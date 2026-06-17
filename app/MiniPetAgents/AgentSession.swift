@@ -108,6 +108,68 @@ enum AgentProvider: String, CaseIterable {
         case .gemini:  return GeminiSession()
         }
     }
+
+    /// Models known to be valid without querying the CLI. Used as picker
+    /// suggestions for providers that don't expose a headless model list.
+    /// (Claude's aliases are stable/documented; others fetch or use Custom.)
+    var knownModels: [String] {
+        switch self {
+        case .claude: return ["opus", "sonnet", "haiku"]
+        default:      return []
+        }
+    }
+}
+
+// MARK: - Model listing (best-effort)
+
+/// Run a CLI and pull single-token model ids from its stdout. Times out so a
+/// CLI that drops into an interactive prompt can't hang the picker.
+func captureModelList(binaryPath: String, arguments: [String],
+                      environment: [String: String],
+                      completion: @escaping ([String]) -> Void) {
+    let proc = Process()
+    proc.executableURL = URL(fileURLWithPath: binaryPath)
+    proc.arguments = arguments
+    proc.environment = environment
+    let out = Pipe()
+    proc.standardOutput = out
+    proc.standardError = Pipe()
+
+    var finished = false
+    let finish: ([String]) -> Void = { models in
+        if finished { return }
+        finished = true
+        DispatchQueue.main.async { completion(models) }
+    }
+
+    proc.terminationHandler = { _ in
+        let data = out.fileHandleForReading.readDataToEndOfFile()
+        let text = String(data: data, encoding: .utf8) ?? ""
+        finish(parseModelTokens(text))
+    }
+    do {
+        try proc.run()
+    } catch {
+        finish([])
+        return
+    }
+    DispatchQueue.global().asyncAfter(deadline: .now() + 5) {
+        if proc.isRunning { proc.terminate() }
+    }
+}
+
+/// Keep only single-token, model-id-looking lines (skips headers/tables).
+func parseModelTokens(_ text: String) -> [String] {
+    var seen = Set<String>()
+    var result: [String] = []
+    for raw in text.split(separator: "\n") {
+        let line = raw.trimmingCharacters(in: .whitespaces)
+        guard !line.contains(" "),
+              line.range(of: "^[A-Za-z][A-Za-z0-9._:/-]{1,}$", options: .regularExpression) != nil
+        else { continue }
+        if seen.insert(line).inserted { result.append(line) }
+    }
+    return result
 }
 
 // MARK: - Title Format
@@ -179,6 +241,12 @@ protocol AgentSession: AnyObject {
     /// restarts its process (its in-CLI context resets).
     func interrupt()
     func terminate()
+    /// Best-effort list of selectable models. Default: none (use Custom entry).
+    func listModels(completion: @escaping ([String]) -> Void)
+}
+
+extension AgentSession {
+    func listModels(completion: @escaping ([String]) -> Void) { completion([]) }
 }
 
 // MARK: - Default attachment handling

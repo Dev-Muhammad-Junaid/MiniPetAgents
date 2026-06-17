@@ -422,6 +422,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         char.session = nil
         char.ensureSession()
         if let s = char.session { char.terminalView?.replayHistory(s.history) }
+        char.setStopButtonVisible(false)
         rebuildMenuBar()
     }
 
@@ -461,12 +462,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         char.session = nil
         char.ensureSession()
         if let s = char.session { char.terminalView?.replayHistory(s.history) }
+        char.setStopButtonVisible(false)
     }
 
     /// Prompt for a model name for this pet (blank = provider default).
     @objc func setModel(_ sender: NSMenuItem) {
         guard let slug = sender.representedObject as? String,
               let pet = PetLibrary.shared.pet(slug: slug) else { return }
+        // If the pet is running, use the richer in-chat picker (fetches models).
+        if let char = controller?.characters.first(where: { $0.petSlug == slug }) {
+            char.promptForModel()
+            return
+        }
         let alert = NSAlert()
         alert.messageText = "Model for \(slug)"
         alert.informativeText = "Enter a model name for this provider (e.g. a Claude, Codex, or Cursor model). Leave blank to use the provider's default."

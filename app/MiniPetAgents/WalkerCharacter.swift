@@ -985,6 +985,9 @@ class WalkerCharacter {
         currentSessionId = HistoryStore.newSessionId()
         ensureSession()
         terminalView?.replayHistory([])
+        // The new session is idle — clear any leftover "stop" affordance/state.
+        setStopButtonVisible(false)
+        setSpriteState(.idle, source: .session)
     }
 
     /// Pop a menu listing past sessions; selecting one loads it.
@@ -1072,6 +1075,8 @@ class WalkerCharacter {
         ensureSession()
         session?.history = messages
         terminalView?.replayHistory(messages)
+        setStopButtonVisible(false)
+        setSpriteState(.idle, source: .session)
     }
 
     private func historyKey() -> String {
@@ -1131,7 +1136,7 @@ class WalkerCharacter {
         }
     }
 
-    private func setStopButtonVisible(_ visible: Bool) {
+    func setStopButtonVisible(_ visible: Bool) {
         stopButton?.isHidden = !visible
     }
 
@@ -1209,21 +1214,71 @@ class WalkerCharacter {
         NSWorkspace.shared.open(url)
     }
 
-    /// Prompt for this pet's model (blank = provider default), then restart.
+    /// Show a model picker (fetched + known models, with a Custom… fallback),
+    /// then restart so the choice takes effect.
     @objc func promptForModel() {
+        let known = resolvedProvider.knownModels
+        if let session = session {
+            session.listModels { [weak self] fetched in
+                self?.showModelPicker(models: Self.mergeModels(known, fetched))
+            }
+        } else {
+            showModelPicker(models: known)
+        }
+    }
+
+    private static func mergeModels(_ a: [String], _ b: [String]) -> [String] {
+        var seen = Set<String>(); var out: [String] = []
+        for m in (a + b) where seen.insert(m).inserted { out.append(m) }
+        return out
+    }
+
+    private func showModelPicker(models: [String]) {
+        let current = PetLibrary.preferredModel(for: petSlug)
         let alert = NSAlert()
         alert.messageText = "Model for \(petSlug)"
-        alert.informativeText = "Enter a model name for this provider. Leave blank to use the provider's default."
-        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
-        field.stringValue = PetLibrary.preferredModel(for: petSlug) ?? ""
-        field.placeholderString = "provider default"
-        alert.accessoryView = field
+        alert.informativeText = models.isEmpty
+            ? "This provider has no headless model list. Enter a model name, or leave blank for the default."
+            : "Pick a model, or choose Custom… to type one. Provider default uses the CLI's default."
+
+        let width: CGFloat = 260
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: width, height: 56))
+        let popup = NSPopUpButton(frame: NSRect(x: 0, y: 28, width: width, height: 26), pullsDown: false)
+        popup.addItem(withTitle: "Provider default")
+        for m in models { popup.addItem(withTitle: m) }
+        popup.addItem(withTitle: "Custom…")
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: width, height: 22))
+        field.placeholderString = "custom model name"
+
+        if let current = current {
+            if models.contains(current) {
+                popup.selectItem(withTitle: current)
+            } else {
+                popup.selectItem(withTitle: "Custom…")
+                field.stringValue = current
+            }
+        } else {
+            popup.selectItem(withTitle: "Provider default")
+        }
+        container.addSubview(popup)
+        container.addSubview(field)
+        alert.accessoryView = container
+
         alert.addButton(withTitle: "Save")
         alert.addButton(withTitle: "Cancel")
         guard alert.runModal() == .alertFirstButtonReturn else { return }
-        let value = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        PetLibrary.setPreferredModel(value.isEmpty ? nil : value, for: petSlug)
-        applyWorkingDirChange()   // restart session so the new model takes effect
+
+        let choice = popup.titleOfSelectedItem ?? "Provider default"
+        let value: String?
+        switch choice {
+        case "Provider default": value = nil
+        case "Custom…":
+            let v = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            value = v.isEmpty ? nil : v
+        default: value = choice
+        }
+        PetLibrary.setPreferredModel(value, for: petSlug)
+        applyWorkingDirChange()
     }
 
     /// The CLI's cwd is fixed at launch, so restart the session to apply a new
@@ -1235,6 +1290,7 @@ class WalkerCharacter {
         if let s = session { terminalView?.replayHistory(s.history) }
         updateWorkingDirButtonTooltip()
         chatTitleLabel?.stringValue = chatTitleString(theme: resolvedTheme, provider: resolvedProvider)
+        setStopButtonVisible(false)
     }
 
     /// Title-bar text: "slug · Provider" plus the working folder when set.

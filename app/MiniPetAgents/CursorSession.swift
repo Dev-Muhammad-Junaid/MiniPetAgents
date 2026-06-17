@@ -179,6 +179,15 @@ class CursorSession: AgentSession {
         chatId = nil
     }
 
+    /// Cursor exposes a headless model list; parse what it prints.
+    func listModels(completion: @escaping ([String]) -> Void) {
+        guard let path = Self.binaryPath else { completion([]); return }
+        captureModelList(binaryPath: path,
+                         arguments: ["--list-models"],
+                         environment: ShellEnvironment.processEnvironment(),
+                         completion: completion)
+    }
+
     // MARK: - Output parsing (cursor-agent stream-json)
 
     private func parseLine(_ line: String) {
