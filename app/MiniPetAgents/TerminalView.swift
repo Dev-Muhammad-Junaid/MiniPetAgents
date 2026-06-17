@@ -99,7 +99,7 @@ private class AttachmentChip: NSView {
 
 // MARK: - TerminalView
 
-class TerminalView: NSView {
+class TerminalView: NSView, NSTextFieldDelegate {
     let scrollView    = NSScrollView()
     let textView      = NSTextView()
     let inputField    = NSTextField()
@@ -107,6 +107,45 @@ class TerminalView: NSView {
 
     /// Called when the user submits a message, with any pending file/image attachments.
     var onSendMessage: ((String, [ChatAttachment]) -> Void)?
+    /// Called when a slash command is run (e.g. "stop", "dir", "model", "finder").
+    /// "help" is handled internally and not forwarded.
+    var onSlashCommand: ((String) -> Void)?
+
+    // MARK: - Slash commands (consistent across every provider)
+
+    private struct SlashItem {
+        let name: String
+        let summary: String
+        let isProvider: Bool
+    }
+    /// App-level commands — same behavior in every provider.
+    private let appCommands: [SlashItem] = [
+        SlashItem(name: "stop",   summary: "Interrupt the current turn", isProvider: false),
+        SlashItem(name: "dir",    summary: "Change the working directory", isProvider: false),
+        SlashItem(name: "model",  summary: "Set the model for this pet", isProvider: false),
+        SlashItem(name: "finder", summary: "Open the working directory in Finder", isProvider: false),
+        SlashItem(name: "help",   summary: "List slash commands", isProvider: false),
+    ]
+    /// Commands the provider's CLI advertises (from its stream-json init event).
+    private var providerCommandItems: [SlashItem] = []
+    private var allCommands: [SlashItem] { appCommands + providerCommandItems }
+    private let palette = NSView()
+    private var filteredCommands: [SlashItem] = []
+    private var selectedCommandIndex = 0
+    private var paletteVisible = false
+    private let paletteRowHeight: CGFloat = 22
+    private let maxVisibleRows = 8
+
+    /// Provider-advertised slash commands (names, with or without a leading "/").
+    /// App commands take precedence on name clashes.
+    func setProviderCommands(_ names: [String]) {
+        let appNames = Set(appCommands.map { $0.name })
+        providerCommandItems = names
+            .map { $0.hasPrefix("/") ? String($0.dropFirst()) : $0 }
+            .filter { !$0.isEmpty && !appNames.contains($0) }
+            .map { SlashItem(name: $0, summary: "\(provider.displayName) command", isProvider: true) }
+        if paletteVisible { updateSlashPalette() }
+    }
 
     private var pendingAttachments: [ChatAttachment] = [] {
         didSet { rebuildAttachmentStrip(); updateLayout() }
@@ -164,6 +203,8 @@ class TerminalView: NSView {
         scrollView.frame = NSRect(x: padding, y: scrollY,
                                   width: frame.width - padding * 2,
                                   height: frame.height - scrollY - padding)
+
+        if paletteVisible { layoutPalette() }
     }
 
     override func resizeSubviews(withOldSize oldSize: NSSize) {
@@ -228,7 +269,17 @@ class TerminalView: NSView {
         inputField.cell   = paddedCell
         inputField.target = self
         inputField.action = #selector(inputSubmitted)
+        inputField.delegate = self
         addSubview(inputField)
+
+        // Slash-command suggestion palette (hidden until "/" is typed).
+        palette.wantsLayer = true
+        palette.layer?.backgroundColor = t.popoverBg.cgColor
+        palette.layer?.cornerRadius = 6
+        palette.layer?.borderWidth = 1
+        palette.layer?.borderColor = t.separatorColor.cgColor
+        palette.isHidden = true
+        addSubview(palette)
 
         updateLayout()
     }
@@ -263,6 +314,19 @@ class TerminalView: NSView {
     @objc private func inputSubmitted() {
         let text = inputField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
+
+        // A bare "/command" matching an app command runs it instead of messaging
+        // the agent. Provider commands (e.g. /compact) fall through and are sent
+        // to the CLI as a normal message.
+        if text.hasPrefix("/") {
+            let name = String(text.dropFirst()).lowercased()
+            if appCommands.contains(where: { $0.name == name }) {
+                inputField.stringValue = ""
+                hidePalette()
+                runCommand(name)
+                return
+            }
+        }
         inputField.stringValue = ""
 
         let attachments = pendingAttachments
@@ -272,6 +336,151 @@ class TerminalView: NSView {
         isStreaming = true
         currentAssistantText = ""
         onSendMessage?(text, attachments)
+    }
+
+    // MARK: - Slash-command palette
+
+    /// NSTextField text changed — refresh the suggestion palette.
+    func controlTextDidChange(_ obj: Notification) {
+        updateSlashPalette()
+    }
+
+    /// Intercept arrows / Enter / Tab / Esc while the palette is open.
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+        guard paletteVisible else { return false }
+        switch commandSelector {
+        case #selector(NSResponder.moveUp(_:)):
+            selectedCommandIndex = max(0, selectedCommandIndex - 1)
+            rebuildPaletteRows()
+            return true
+        case #selector(NSResponder.moveDown(_:)):
+            selectedCommandIndex = min(filteredCommands.count - 1, selectedCommandIndex + 1)
+            rebuildPaletteRows()
+            return true
+        case #selector(NSResponder.insertNewline(_:)):
+            executeSelectedCommand()
+            return true
+        case #selector(NSResponder.insertTab(_:)):
+            if selectedCommandIndex < filteredCommands.count {
+                inputField.stringValue = "/\(filteredCommands[selectedCommandIndex].name)"
+            }
+            updateSlashPalette()
+            return true
+        case #selector(NSResponder.cancelOperation(_:)):
+            hidePalette()
+            return true
+        default:
+            return false
+        }
+    }
+
+    private func updateSlashPalette() {
+        let text = inputField.stringValue
+        // Only while typing a single "/token" (no space yet).
+        guard text.hasPrefix("/"), !text.contains(" ") else { hidePalette(); return }
+        let query = String(text.dropFirst()).lowercased()
+        filteredCommands = query.isEmpty ? allCommands : allCommands.filter { $0.name.hasPrefix(query) }
+        guard !filteredCommands.isEmpty else { hidePalette(); return }
+        if selectedCommandIndex >= filteredCommands.count { selectedCommandIndex = 0 }
+        paletteVisible = true
+        palette.isHidden = false
+        layoutPalette()
+    }
+
+    /// Visible slice of the filtered list, scrolled to keep the selection in view.
+    private func visibleWindow() -> (start: Int, count: Int) {
+        let total = filteredCommands.count
+        let count = min(total, maxVisibleRows)
+        var start = 0
+        if selectedCommandIndex >= maxVisibleRows {
+            start = selectedCommandIndex - maxVisibleRows + 1
+        }
+        start = max(0, min(start, total - count))
+        return (start, count)
+    }
+
+    private func layoutPalette() {
+        let stripUsed = pendingAttachments.isEmpty ? 0 : stripHeight + 2
+        let (_, count) = visibleWindow()
+        let h = CGFloat(count) * paletteRowHeight + 8
+        palette.frame = NSRect(x: padding, y: inputHeight + 10 + stripUsed,
+                               width: frame.width - padding * 2, height: h)
+        rebuildPaletteRows()
+    }
+
+    private func hidePalette() {
+        paletteVisible = false
+        palette.isHidden = true
+        selectedCommandIndex = 0
+    }
+
+    private func rebuildPaletteRows() {
+        palette.subviews.forEach { $0.removeFromSuperview() }
+        let t = theme
+        let (start, count) = visibleWindow()
+        for offset in 0..<count {
+            let idx = start + offset
+            let cmd = filteredCommands[idx]
+            let y = palette.bounds.height - CGFloat(offset + 1) * paletteRowHeight - 4
+            let row = NSButton(frame: NSRect(x: 4, y: y, width: palette.bounds.width - 8, height: paletteRowHeight))
+            row.isBordered = false
+            row.bezelStyle = .inline
+            row.alignment = .left
+            let title = NSMutableAttributedString()
+            title.append(NSAttributedString(string: "/\(cmd.name)  ", attributes: [
+                .font: t.fontBold, .foregroundColor: t.accentColor
+            ]))
+            title.append(NSAttributedString(string: cmd.summary, attributes: [
+                .font: t.font, .foregroundColor: t.textDim
+            ]))
+            row.attributedTitle = title
+            row.wantsLayer = true
+            row.layer?.cornerRadius = 4
+            row.layer?.backgroundColor = (idx == selectedCommandIndex)
+                ? t.accentColor.withAlphaComponent(0.18).cgColor : NSColor.clear.cgColor
+            row.tag = idx
+            row.target = self
+            row.action = #selector(paletteRowClicked(_:))
+            palette.addSubview(row)
+        }
+    }
+
+    @objc private func paletteRowClicked(_ sender: NSButton) {
+        selectedCommandIndex = sender.tag
+        executeSelectedCommand()
+    }
+
+    private func executeSelectedCommand() {
+        guard paletteVisible, selectedCommandIndex < filteredCommands.count else { return }
+        let item = filteredCommands[selectedCommandIndex]
+        inputField.stringValue = ""
+        hidePalette()
+        if item.isProvider {
+            // Send the provider command to the CLI as a normal message.
+            sendText("/\(item.name)")
+        } else {
+            runCommand(item.name)
+        }
+    }
+
+    /// Submit arbitrary text as if the user typed and entered it.
+    private func sendText(_ text: String) {
+        appendUser(text)
+        isStreaming = true
+        currentAssistantText = ""
+        onSendMessage?(text, [])
+    }
+
+    private func runCommand(_ name: String) {
+        if name == "help" {
+            var lines = appCommands.map { "  /\($0.name) — \($0.summary)" }
+            if !providerCommandItems.isEmpty {
+                lines.append("  …plus \(providerCommandItems.count) \(provider.displayName) commands (type / to see them)")
+            }
+            appendSystemNote("Slash commands:\n\(lines.joined(separator: "\n"))")
+            return
+        }
+        onSlashCommand?(name)
     }
 
     // MARK: - Drag & Drop

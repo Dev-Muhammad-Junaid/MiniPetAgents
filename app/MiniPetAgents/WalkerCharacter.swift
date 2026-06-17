@@ -233,6 +233,8 @@ class WalkerCharacter {
     var clickOutsideMonitor: Any?
     var escapeKeyMonitor: Any?
     var currentStreamingText = ""
+    /// Slash commands advertised by the provider's CLI (from its init event).
+    var providerCommands: [String] = []
     weak var controller: PetAgentsController?
     var themeOverride: PopoverTheme?
     var providerOverride: AgentProvider?
@@ -905,6 +907,17 @@ class WalkerCharacter {
             self?.session?.send(message: message, attachments: attachments)
             self?.setStopButtonVisible(true)
         }
+        terminal.onSlashCommand = { [weak self] name in
+            guard let self = self else { return }
+            switch name {
+            case "stop":   self.stopCurrentTurn()
+            case "dir":    self.pickWorkingDir()
+            case "model":  self.promptForModel()
+            case "finder": self.openWorkingDirInFinder()
+            default:       break
+            }
+        }
+        terminal.setProviderCommands(providerCommands)
         container.addSubview(terminal)
 
         // Visible resize grip in the bottom-right corner. Drag to resize.
@@ -1106,6 +1119,10 @@ class WalkerCharacter {
         session.onUsage = { [weak self] note in
             self?.terminalView?.appendSystemNote(note)
         }
+        session.onProviderCommands = { [weak self] cmds in
+            self?.providerCommands = cmds
+            self?.terminalView?.setProviderCommands(cmds)
+        }
         session.onProcessExit = { [weak self] in
             self?.setStopButtonVisible(false)
             self?.terminalView?.endStreaming()
@@ -1190,6 +1207,23 @@ class WalkerCharacter {
         let url = PetLibrary.preferredWorkingDirectory(for: petSlug)
             ?? FileManager.default.homeDirectoryForCurrentUser
         NSWorkspace.shared.open(url)
+    }
+
+    /// Prompt for this pet's model (blank = provider default), then restart.
+    @objc func promptForModel() {
+        let alert = NSAlert()
+        alert.messageText = "Model for \(petSlug)"
+        alert.informativeText = "Enter a model name for this provider. Leave blank to use the provider's default."
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
+        field.stringValue = PetLibrary.preferredModel(for: petSlug) ?? ""
+        field.placeholderString = "provider default"
+        alert.accessoryView = field
+        alert.addButton(withTitle: "Save")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let value = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        PetLibrary.setPreferredModel(value.isEmpty ? nil : value, for: petSlug)
+        applyWorkingDirChange()   // restart session so the new model takes effect
     }
 
     /// The CLI's cwd is fixed at launch, so restart the session to apply a new

@@ -20,6 +20,7 @@ class CursorSession: AgentSession {
     var onTurnComplete: (() -> Void)?
     var onProcessExit: (() -> Void)?
     var onUsage: ((String) -> Void)?
+    var onProviderCommands: (([String]) -> Void)?
 
     var history: [AgentMessage] = []
     var workingDirectory: URL?
@@ -200,7 +201,12 @@ class CursorSession: AgentSession {
         let type = json["type"] as? String ?? ""
         switch type {
         case "system":
-            if json["subtype"] as? String == "init" { onSessionReady?() }
+            if json["subtype"] as? String == "init" {
+                onSessionReady?()
+                if let cmds = json["slash_commands"] as? [String], !cmds.isEmpty {
+                    onProviderCommands?(cmds)
+                }
+            }
 
         case "assistant":
             // Claude-compatible shape: message.content is an array of blocks.

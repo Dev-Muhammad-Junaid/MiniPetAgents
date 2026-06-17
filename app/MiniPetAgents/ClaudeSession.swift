@@ -18,6 +18,7 @@ class ClaudeSession: AgentSession {
     var onTurnComplete: (() -> Void)?
     var onProcessExit: (() -> Void)?
     var onUsage: ((String) -> Void)?
+    var onProviderCommands: (([String]) -> Void)?
 
     var history: [AgentMessage] = []   // satisfies { get set } protocol requirement
     var workingDirectory: URL?
@@ -226,6 +227,11 @@ class ClaudeSession: AgentSession {
             let subtype = json["subtype"] as? String ?? ""
             if subtype == "init" {
                 onSessionReady?()
+                // The init handshake lists every available slash command
+                // (built-in + custom + skills) for this version/session.
+                if let cmds = json["slash_commands"] as? [String], !cmds.isEmpty {
+                    onProviderCommands?(cmds)
+                }
             }
 
         case "assistant":

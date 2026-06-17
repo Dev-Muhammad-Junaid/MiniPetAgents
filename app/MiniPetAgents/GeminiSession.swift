@@ -29,6 +29,7 @@ class GeminiSession: AgentSession {
     var onTurnComplete: (() -> Void)?
     var onProcessExit: (() -> Void)?
     var onUsage: ((String) -> Void)?
+    var onProviderCommands: (([String]) -> Void)?
 
     var history: [AgentMessage] = []
     var workingDirectory: URL?

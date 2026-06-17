@@ -168,6 +168,8 @@ protocol AgentSession: AnyObject {
     var onProcessExit: (() -> Void)? { get set }
     /// Per-turn usage line (tokens / cost) when the provider reports it.
     var onUsage: ((String) -> Void)? { get set }
+    /// Slash commands the provider advertises (e.g. from Claude's init event).
+    var onProviderCommands: (([String]) -> Void)? { get set }
 
     func start()
     func send(message: String)
