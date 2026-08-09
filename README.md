@@ -176,11 +176,10 @@ yourself, but this repo does not redistribute them.
 
 ## Known gaps
 
+- No prebuilt download yet — clone and build. See [RELEASING.md](RELEASING.md)
+  for the signing and notarization checklist.
 - Sparkle is wired up but no appcast is published yet, so automatic update
-  checks are switched off in `Info.plist`. Publishing a feed means adding
-  `appcast.xml`, setting `SUPublicEDKey`, and flipping `SUEnableAutomaticChecks`.
-- Hit testing still uses `CGWindowListCreateImage`, deprecated in macOS 14 in
-  favour of ScreenCaptureKit.
+  checks are switched off in `Info.plist`.
 - No automated tests.
 
 ## License
