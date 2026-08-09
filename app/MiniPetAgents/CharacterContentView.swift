@@ -62,44 +62,26 @@ class CharacterContentView: NSView {
     }
     override func cursorUpdate(with event: NSEvent) { applyCursor() }
 
+    /// Alpha below this reads as "you clicked the gap around the pet, not the
+    /// pet" and the click passes through to whatever is behind the window.
+    private static let alphaHitThreshold: CGFloat = 30.0 / 255.0
+
     override func hitTest(_ point: NSPoint) -> NSView? {
         let localPoint = convert(point, from: superview)
         guard bounds.contains(localPoint) else { return nil }
 
-        // Pixel-alpha hit test against the on-screen sprite for accurate clicks
-        // through transparent regions.
-        let screenPoint = window?.convertPoint(toScreen: convert(localPoint, to: nil)) ?? .zero
-        guard let primaryScreen = NSScreen.screens.first else { return nil }
-        let flippedY = primaryScreen.frame.height - screenPoint.y
-
-        let captureRect = CGRect(x: screenPoint.x - 0.5, y: flippedY - 0.5, width: 1, height: 1)
-        guard let windowID = window?.windowNumber, windowID > 0 else { return nil }
-
-        if let image = CGWindowListCreateImage(
-            captureRect,
-            .optionIncludingWindow,
-            CGWindowID(windowID),
-            [.boundsIgnoreFraming, .bestResolution]
-        ) {
-            let colorSpace = CGColorSpaceCreateDeviceRGB()
-            var pixel: [UInt8] = [0, 0, 0, 0]
-            if let ctx = CGContext(
-                data: &pixel, width: 1, height: 1,
-                bitsPerComponent: 8, bytesPerRow: 4,
-                space: colorSpace,
-                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-            ) {
-                ctx.draw(image, in: CGRect(x: 0, y: 0, width: 1, height: 1))
-                if pixel[3] > 30 { return self }
-                return nil
-            }
+        // Sample the sprite frame the animator is showing. The host view is
+        // unflipped and the sprite layer is pinned to bounds, so view
+        // coordinates are already layer coordinates.
+        if let alpha = character?.spriteAlpha(atLayerPoint: localPoint) {
+            return alpha > Self.alphaHitThreshold ? self : nil
         }
 
-        // Fallback: accept click within center 60% of view.
+        // No frame to sample (placeholder pet, or a pack that failed to
+        // decode): accept a click within the centre 60% of the view.
         let insetX = bounds.width * 0.2
         let insetY = bounds.height * 0.15
-        let hitRect = bounds.insetBy(dx: insetX, dy: insetY)
-        return hitRect.contains(localPoint) ? self : nil
+        return bounds.insetBy(dx: insetX, dy: insetY).contains(localPoint) ? self : nil
     }
 
     override func mouseDown(with event: NSEvent) {

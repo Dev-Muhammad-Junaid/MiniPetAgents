@@ -297,6 +297,13 @@ final class SpriteAnimator {
     private var lastFrameTime: CFTimeInterval = 0
     /// Current animation state (drives static-hold vs timed advance vs walk sync).
     private(set) var currentState: PetState = .idle
+    /// The frame currently on screen. Used for alpha hit testing so a click
+    /// can fall through the transparent parts of the sprite without having to
+    /// screen-capture the window back off the compositor.
+    var currentFrameImage: NSImage? {
+        guard currentFrames.indices.contains(frameIndex) else { return nil }
+        return currentFrames[frameIndex]
+    }
     /// When false, we hold a single frame (no rapid cycling — avoids idle "blinks").
     private var advanceFramesWithTimer = true
 

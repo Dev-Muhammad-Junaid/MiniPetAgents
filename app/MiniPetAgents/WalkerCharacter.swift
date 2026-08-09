@@ -593,6 +593,65 @@ class WalkerCharacter {
         updateThinkingBubble()
     }
 
+    // MARK: - Alpha hit testing
+
+    /// Opacity of the on-screen sprite at `point`, expressed in sprite-layer
+    /// coordinates (origin bottom-left, matching the unflipped host view).
+    ///
+    /// Sampled straight from the frame the animator is currently showing.
+    /// The old approach screen-captured the pet's own window off the
+    /// compositor via `CGWindowListCreateImage`, which Apple deprecated in
+    /// macOS 14 and which would need a Screen Recording grant under its
+    /// ScreenCaptureKit replacement — a lot to ask for reading one pixel we
+    /// already have in memory.
+    ///
+    /// Returns `nil` only when there is no frame to sample (placeholder pet,
+    /// or a pack that failed to decode), so callers can fall back.
+    func spriteAlpha(atLayerPoint point: CGPoint) -> CGFloat? {
+        guard let image = animator?.currentFrameImage ?? (spriteLayer.contents as? NSImage)
+        else { return nil }
+
+        var proposed = CGRect(origin: .zero, size: image.size)
+        guard let cg = image.cgImage(forProposedRect: &proposed, context: nil, hints: nil),
+              cg.width > 0, cg.height > 0 else { return nil }
+
+        let box = spriteLayer.bounds
+        guard box.width > 0, box.height > 0 else { return nil }
+
+        // `contentsGravity = .resizeAspect` scales the frame to fit the layer
+        // and centres the leftover — mirror that here or clicks land off by
+        // the letterbox margin (sprite frames are 192x208 inside a square
+        // window, so the margin is real).
+        let scale = min(box.width / CGFloat(cg.width), box.height / CGFloat(cg.height))
+        let drawnW = CGFloat(cg.width) * scale
+        let drawnH = CGFloat(cg.height) * scale
+        let localX = point.x - (box.width - drawnW) / 2
+        let localY = point.y - (box.height - drawnH) / 2
+        guard localX >= 0, localY >= 0, localX < drawnW, localY < drawnH else { return 0 }
+
+        // Layer coords run bottom-up; CGImage rows run top-down.
+        let px = min(cg.width - 1, max(0, Int(localX / scale)))
+        let py = min(cg.height - 1, max(0, Int((drawnH - localY) / scale)))
+        return WalkerCharacter.alpha(of: cg, x: px, yFromTop: py)
+    }
+
+    /// Read one pixel's alpha by drawing the image into a 1x1 ARGB context
+    /// positioned so the wanted pixel lands on the context's only slot.
+    /// Core Graphics clips the rest, so this stays cheap regardless of sheet size.
+    private static func alpha(of image: CGImage, x: Int, yFromTop: Int) -> CGFloat? {
+        var pixel: [UInt8] = [0, 0, 0, 0]
+        guard let ctx = CGContext(data: &pixel, width: 1, height: 1,
+                                  bitsPerComponent: 8, bytesPerRow: 4,
+                                  space: CGColorSpaceCreateDeviceRGB(),
+                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+        else { return nil }
+        ctx.draw(image, in: CGRect(x: CGFloat(-x),
+                                   y: CGFloat(-(image.height - 1 - yFromTop)),
+                                   width: CGFloat(image.width),
+                                   height: CGFloat(image.height)))
+        return CGFloat(pixel[3]) / 255.0
+    }
+
     /// Keeps walk sprite frames aligned with movement along the dock (0…1).
     /// No-op: walk frames now cycle at the sprite's natural FPS (set by the
     /// pet's `pet.json`) instead of being pegged to position. Position-locked
