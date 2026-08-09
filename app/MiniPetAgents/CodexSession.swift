@@ -69,15 +69,22 @@ class CodexSession: AgentSession {
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: binaryPath)
 
-        // `--full-auto` is deprecated in current Codex; `--sandbox workspace-write`
-        // is the replacement (same effect: auto-run with write access to the
-        // working dir). exec is already non-interactive, so no approval flag.
+        // `--full-auto` is deprecated in current Codex; workspace-write is the
+        // replacement (auto-run with write access to the working dir). exec is
+        // already non-interactive, so no approval flag.
+        //
+        // Set it via `-c sandbox_mode=` rather than the `--sandbox` flag:
+        // `codex exec` accepts `--sandbox`, but `codex exec resume` does NOT
+        // and hard-fails with "unexpected argument '--sandbox' found". The
+        // `-c` config override is accepted by both, so one form covers the
+        // first turn and every follow-up.
         var args: [String]
         if let threadId = threadId {
-            args = ["exec", "resume", threadId, "--json", "--sandbox", "workspace-write", "--skip-git-repo-check"]
+            args = ["exec", "resume", threadId, "--json", "--skip-git-repo-check"]
         } else {
-            args = ["exec", "--json", "--sandbox", "workspace-write", "--skip-git-repo-check"]
+            args = ["exec", "--json", "--skip-git-repo-check"]
         }
+        args += ["-c", "sandbox_mode=\"workspace-write\""]
         if let model = model { args += ["--model", model] }
         args.append(message)
         proc.arguments = args
@@ -89,6 +96,11 @@ class CodexSession: AgentSession {
 
         let outPipe = Pipe()
         let errPipe = Pipe()
+        // Never let the CLI inherit the app's stdin. An inherited terminal
+        // makes Node-based CLIs think they're interactive and try to render a
+        // TUI, which blows up with "Raw mode is not supported on the current
+        // process.stdin". We only ever want headless output here.
+        proc.standardInput = FileHandle.nullDevice
         proc.standardOutput = outPipe
         proc.standardError = errPipe
 

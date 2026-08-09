@@ -26,8 +26,21 @@ There are no tests, so changes get checked by running the app:
 cd app && xcodebuild -scheme MiniPetAgents -configuration Debug build
 ```
 
-Then run it and drive the specific thing you touched. Movement and animation
-work is easy to get subtly wrong in ways a build can't catch — a pet that
+If you touched anything under `*Session.swift`, also run the provider contract
+check — it validates the arguments the app passes against each installed CLI's
+actual help output:
+
+```bash
+./scripts/check-agents.py           # free
+./scripts/check-agents.py --live    # one real prompt per provider
+```
+
+It reads the flags straight out of the Swift source, so adding a flag without
+updating the test's expectations fails the drift guard rather than silently
+going uncovered.
+
+Then run the app and drive the specific thing you touched. Movement and
+animation work is easy to get subtly wrong in ways a build can't catch — a pet that
 freezes for a beat between walk legs, or blinks out at the end of an animation
 cycle, still compiles perfectly. Watch the actual pet for a minute.
 

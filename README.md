@@ -65,6 +65,20 @@ frames the artist drew.
 | Copilot | `copilot` | `npm i -g @github/copilot` |
 | Cursor | `cursor-agent` | [cursor.com/cli](https://cursor.com/cli) |
 
+These CLIs change their argument surface fairly often, and a change breaks the
+app silently — the pet just reports an error. To check the ones you have
+installed still accept what the app passes:
+
+```bash
+./scripts/check-agents.py           # free: validates flags against each CLI's help
+./scripts/check-agents.py --live    # also sends one tiny prompt per provider
+```
+
+Run it after upgrading any CLI. It checks each invocation path separately,
+because a flag can be valid on one subcommand and rejected on another — `codex
+exec` accepts `--sandbox` while `codex exec resume` does not, which broke every
+follow-up message while first messages kept working.
+
 Gemini is implemented (`GeminiSession.swift`, targeting the Antigravity `agy`
 binary) but hidden from the UI: `agy` is an autonomous coding agent with no
 chat-only mode, so it goes exploring the filesystem instead of answering like a

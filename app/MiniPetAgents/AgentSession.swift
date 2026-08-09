@@ -132,6 +132,13 @@ func captureModelList(binaryPath: String, arguments: [String],
     proc.arguments = arguments
     proc.environment = environment
     let out = Pipe()
+    // Give the CLI a closed stdin rather than inheriting the app's. Model
+    // listing runs without any "print/headless" flag, so a CLI that sees an
+    // interactive stdin may try to draw a TUI — Ink-based ones fail loudly
+    // with "Raw mode is not supported on the current process.stdin" and spray
+    // terminal escape codes into our output. The timeout below is the backstop;
+    // this is the actual prevention.
+    proc.standardInput = FileHandle.nullDevice
     proc.standardOutput = out
     proc.standardError = Pipe()
 

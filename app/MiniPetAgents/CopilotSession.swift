@@ -83,6 +83,11 @@ class CopilotSession: AgentSession {
 
         let outPipe = Pipe()
         let errPipe = Pipe()
+        // Never let the CLI inherit the app's stdin. An inherited terminal
+        // makes Node-based CLIs think they're interactive and try to render a
+        // TUI, which blows up with "Raw mode is not supported on the current
+        // process.stdin". We only ever want headless output here.
+        proc.standardInput = FileHandle.nullDevice
         proc.standardOutput = outPipe
         proc.standardError = errPipe
 

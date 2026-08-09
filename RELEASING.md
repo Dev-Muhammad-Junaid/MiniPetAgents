@@ -6,6 +6,18 @@ is the checklist for putting out a downloadable build when you want one.
 Steps 2 and 3 need your Apple Developer credentials, so they can only be run by
 you.
 
+## 0. Check the providers still work
+
+CLI argument surfaces drift between releases, and a break is invisible until a
+pet reports an error mid-conversation. Gate on this:
+
+```bash
+./scripts/check-agents.py --live
+```
+
+Non-zero exit means at least one provider would fail inside the app. Fix before
+tagging.
+
 ## 1. Version
 
 Bump `MARKETING_VERSION` in `app/MiniPetAgents.xcodeproj/project.pbxproj`

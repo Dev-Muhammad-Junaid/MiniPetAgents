@@ -97,6 +97,9 @@ final class PetInstaller {
             "set -o pipefail; curl -fsSL 'https://petdex.dev/install/\(slug)' | sh"
         ]
         proc.environment = ShellEnvironment.processEnvironment()
+        // Closed stdin: the piped script is sh's input, so nothing should be
+        // read from the app's own stdin, and a prompt here would hang install.
+        proc.standardInput = FileHandle.nullDevice
 
         let stdout = Pipe()
         let stderr = Pipe()
@@ -155,6 +158,9 @@ final class PetInstaller {
             // install flow doesn't stall waiting for stdin input.
             proc.arguments = ["--yes", "petdex"] + args
             proc.environment = ShellEnvironment.processEnvironment()
+            // Belt and braces with --yes: a closed stdin turns any prompt we
+            // didn't anticipate into EOF instead of an indefinite hang.
+            proc.standardInput = FileHandle.nullDevice
 
             let stdout = Pipe()
             let stderr = Pipe()
