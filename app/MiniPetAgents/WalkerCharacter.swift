@@ -1354,8 +1354,6 @@ class WalkerCharacter {
     private static let bubbleH: CGFloat = 26
 
     func updateThinkingBubble() {
-        let now = CACurrentMediaTime()
-
         if showingCompletion {
             // Persistent until the user clicks the bubble — no expiry.
             if isIdleForPopover {

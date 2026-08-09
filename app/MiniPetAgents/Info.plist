@@ -5,9 +5,11 @@
     <key>LSUIElement</key>
     <true/>
     <key>SUFeedURL</key>
-    <string>https://example.com/minipetagents/appcast.xml</string>
+    <string>https://raw.githubusercontent.com/Dev-Muhammad-Junaid/MiniPetAgents/main/appcast.xml</string>
+    <!-- Off until a signed appcast is actually published at SUFeedURL. Flip to
+         <true/> in the same commit that adds appcast.xml and SUPublicEDKey. -->
     <key>SUEnableAutomaticChecks</key>
-    <true/>
+    <false/>
     <key>SUAllowsAutomaticUpdates</key>
     <false/>
 </dict>
