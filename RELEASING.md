@@ -15,6 +15,7 @@ pet reports an error mid-conversation. Gate on this:
 ./scripts/check-agents.py --live
 APP="$(ls -dt ~/Library/Developer/Xcode/DerivedData/MiniPetAgents-*/Build/Products/Debug/'Mini Pet Agents.app' | head -1)/Contents/MacOS/Mini Pet Agents"
 "$APP" --self-test-features
+"$APP" --self-test-edges
 "$APP" --self-test-agents
 ```
 

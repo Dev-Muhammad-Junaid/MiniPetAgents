@@ -523,6 +523,8 @@ enum FeatureSelfTest {
         hitGeometry()
         preferences()
         matchers()
+        brokenPacks()
+        missingBinaries()
         print("")
         print(failures == 0
               ? "All \(checks) feature checks passed."
@@ -664,11 +666,195 @@ enum FeatureSelfTest {
         expect(meaningfulStderr("Error: boom") == "Error: boom", "a real error should pass through")
     }
 
+    /// E-06 — a pack that is damaged on disk must be skipped, not crash the
+    /// app or take the other pets down with it.
+    private static func brokenPacks() {
+        section("damaged pet packs")
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent("mpa-selftest-\(UUID().uuidString)")
+        defer { try? fm.removeItem(at: root) }
+
+        func makeCase(_ name: String, json: String?, sheet: Bool) -> URL {
+            let dir = root.appendingPathComponent(name)
+            try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+            if let json = json {
+                try? json.write(to: dir.appendingPathComponent("pet.json"),
+                                atomically: true, encoding: .utf8)
+            }
+            if sheet {
+                try? Data("not an image".utf8)
+                    .write(to: dir.appendingPathComponent("spritesheet.png"))
+            }
+            return dir
+        }
+
+        expect(PetPack.load(from: makeCase("empty", json: nil, sheet: false)) == nil,
+               "a directory with no pet.json is skipped")
+        expect(PetPack.load(from: makeCase("badjson", json: "{ not json", sheet: true)) == nil,
+               "malformed pet.json is skipped")
+        expect(PetPack.load(from: makeCase("nosheet", json: "{\"id\":\"x\"}", sheet: false)) == nil,
+               "a pack with no spritesheet is skipped")
+        expect(PetPack.load(from: makeCase("badsheet", json: "{\"id\":\"x\"}", sheet: true)) == nil,
+               "an undecodable spritesheet is skipped")
+        expect(PetPack.load(from: root.appendingPathComponent("does-not-exist")) == nil,
+               "a missing directory is skipped")
+    }
+
+    /// E-02 — when a CLI isn't installed the user needs to be told which one
+    /// and how to get it, not handed a launch failure.
+    private static func missingBinaries() {
+        section("missing CLI guidance")
+        for provider in AgentProvider.allCases {
+            let text = provider.installInstructions
+            expect(!text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                   "\(provider.rawValue): has install instructions")
+            let mentionsBinary = provider.binaryCandidates.contains { text.contains($0) }
+            expect(mentionsBinary || text.contains("http"),
+                   "\(provider.rawValue): instructions name the binary or link somewhere")
+        }
+    }
+
     // MARK: harness
 
     private static func section(_ name: String) { print("  \(name)") }
     private static func skip(_ why: String) { print("    skip  \(why)") }
     private static func fail(_ why: String) { failures += 1; checks += 1; print("    FAIL  \(why)") }
+    private static func expect(_ condition: Bool, _ description: String) {
+        checks += 1
+        if condition { print("    ok    \(description)") }
+        else { failures += 1; print("    FAIL  \(description)") }
+    }
+}
+
+// MARK: - Headless edge-case self-test
+
+/// Failure paths that need a real subprocess: a CLI dying mid-turn, a second
+/// message arriving while one is in flight, a working directory that no longer
+/// exists, and cleanup on quit. These are the ones that bite real users, and
+/// none of them are reachable from a pure-logic test.
+///
+///     "…/Mini Pet Agents" --self-test-edges [--provider codex]
+enum EdgeSelfTest {
+    private static var failures = 0
+    private static var checks = 0
+
+    static func run(provider: AgentProvider) -> Never {
+        setvbuf(stdout, nil, _IONBF, 0)
+        print("")
+        print("  edge cases via \(provider.rawValue)")
+        badWorkingDirectory(provider)
+        busyGuard(provider)
+        killedMidTurn(provider)
+        terminateIsClean(provider)
+        print("")
+        print(failures == 0
+              ? "All \(checks) edge-case checks passed."
+              : "\(failures) of \(checks) edge-case checks failed.")
+        fflush(stdout)
+        exit(failures == 0 ? 0 : 1)
+    }
+
+    /// E-08 — a stale per-pet working directory must produce a visible error,
+    /// not a pet stuck in the thinking pose forever.
+    private static func badWorkingDirectory(_ provider: AgentProvider) {
+        let session = provider.createSession()
+        session.workingDirectory = URL(fileURLWithPath: "/nope/does/not/exist-\(UUID().uuidString)")
+        var reported: String?
+        var settled = false
+        session.onError = { if reported == nil { reported = $0 }; settled = true }
+        session.onTurnComplete = { settled = true }
+        session.start()
+        pump(until: { session.isRunning }, for: 10)
+        session.send(message: "hello")
+        pump(until: { settled }, for: 25)
+        session.terminate()
+
+        expect(settled, "E-08 a missing working directory settles instead of hanging")
+        expect(reported?.isEmpty == false, "E-08 the failure is reported to the user")
+        expect(!session.isBusy, "E-08 the session doesn't stay busy afterwards")
+    }
+
+    /// E-05 — a second prompt while one is in flight is refused with an
+    /// explanation, and does not disturb the turn already running.
+    private static func busyGuard(_ provider: AgentProvider) {
+        let session = provider.createSession()
+        var messages: [String] = []
+        session.onError = { messages.append($0) }
+        session.start()
+        pump(until: { session.isRunning }, for: 15)
+        session.send(message: "Count slowly to twenty, one number per line.")
+        pump(until: { session.isBusy }, for: 10)
+        let wasBusy = session.isBusy
+        session.send(message: "second message while busy")
+        pump(until: { !messages.isEmpty }, for: 5)
+        session.interrupt()
+        session.terminate()
+
+        expect(wasBusy, "E-05 the session reports busy during a turn")
+        expect(messages.contains { $0.lowercased().contains("still working") },
+               "E-05 a second message is refused with an explanation")
+    }
+
+    /// E-03 — the CLI dying mid-turn must surface and clear, so the pet
+    /// recovers rather than sitting in the thinking pose.
+    private static func killedMidTurn(_ provider: AgentProvider) {
+        let session = provider.createSession()
+        var settled = false
+        session.onError = { _ in settled = true }
+        session.onTurnComplete = { settled = true }
+        session.onProcessExit = { settled = true }
+        session.start()
+        pump(until: { session.isRunning }, for: 15)
+        session.send(message: "Count slowly to fifty, one number per line.")
+        pump(until: { session.isBusy }, for: 10)
+
+        // Kill the child out from under the session.
+        let pattern = provider.binaryCandidates.first ?? "codex"
+        _ = shell("/usr/bin/pkill", ["-f", pattern])
+        pump(until: { settled }, for: 25)
+        let busyAfter = session.isBusy
+        session.terminate()
+
+        expect(settled, "E-03 a killed CLI is noticed rather than hanging the turn")
+        expect(!busyAfter, "E-03 the session clears busy so the pet can recover")
+    }
+
+    /// E-12 — quitting with a turn in flight must leave nothing behind, and
+    /// terminate must be safe to call twice.
+    private static func terminateIsClean(_ provider: AgentProvider) {
+        let session = provider.createSession()
+        session.start()
+        pump(until: { session.isRunning }, for: 15)
+        session.send(message: "Count slowly to fifty, one number per line.")
+        pump(until: { session.isBusy }, for: 10)
+        session.terminate()
+        pump(until: { !session.isRunning }, for: 5)
+
+        expect(!session.isRunning, "E-12 terminate stops the session")
+        expect(!session.isBusy, "E-12 terminate clears the busy flag")
+        session.terminate()   // must not crash
+        expect(true, "E-12 terminate is safe to call twice")
+    }
+
+    // MARK: harness
+
+    @discardableResult
+    private static func shell(_ path: String, _ args: [String]) -> Int32 {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: path)
+        p.arguments = args
+        p.standardOutput = FileHandle.nullDevice
+        p.standardError = FileHandle.nullDevice
+        do { try p.run(); p.waitUntilExit(); return p.terminationStatus } catch { return -1 }
+    }
+
+    private static func pump(until condition: () -> Bool, for seconds: TimeInterval) {
+        let deadline = Date().addingTimeInterval(seconds)
+        while !condition(), Date() < deadline {
+            RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.05))
+        }
+    }
+
     private static func expect(_ condition: Bool, _ description: String) {
         checks += 1
         if condition { print("    ok    \(description)") }

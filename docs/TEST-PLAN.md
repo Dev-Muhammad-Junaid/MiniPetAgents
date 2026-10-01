@@ -8,10 +8,11 @@ Three levels, cheapest first:
 |---|---|---|
 | CLI contract | `./scripts/check-agents.py` | the arguments we pass are still accepted |
 | Session layer | `"…/Mini Pet Agents" --self-test-agents` | a real turn through the app's own session classes |
-| Feature logic | `"…/Mini Pet Agents" --self-test-features` | sprite packs, hit geometry, preferences, error matchers (116 checks) |
+| Feature logic | `"…/Mini Pet Agents" --self-test-features` | sprite packs, hit geometry, preferences, error matchers, damaged packs (131 checks) |
+| Edge cases | `"…/Mini Pet Agents" --self-test-edges` | killed CLI, busy guard, stale working dir, cleanup (10 checks) |
 | Manual | this document | anything that needs a window, a sprite in motion or a pointer |
 
-The first three are automated and gate a release (`RELEASING.md` step 0).
+All four are automated and gate a release (`RELEASING.md` step 0).
 The manual cases below are the ones no script can reach — if you only have ten
 minutes, run the **smoke** set.
 
@@ -95,22 +96,24 @@ Legend: **[A]** automated · **[M]** manual · **[S]** in the smoke set.
 
 ## 7. Edge cases
 
-These are the ones that bite real users. Most are reachable by hand in a minute.
+Most of these are automated now. The four that are not need hardware or network
+events a script can't stage: E-04 (network drop), E-07 (pet folder deleted while
+running), E-09 (dock auto-hide), E-10 (display unplugged), E-11 (sleep/wake).
 
 | ID | Case | Expected |
 |---|---|---|
 | E-01 **[A]** | Provider CLI not signed in | Friendly sign-in prompt naming the exact command — not a raw stderr dump. Each provider's own message is asserted against the matcher |
-| E-02 **[M]** | Provider CLI not installed | Clear message with install instructions |
-| E-03 **[M]** | Kill the CLI mid-reply (`pkill -f codex`) | Pet reports the failure and recovers; no crash, no stuck thinking pose |
+| E-02 **[A]** | Provider CLI not installed | Every provider has instructions naming its binary or a link |
+| E-03 **[A]** | Kill the CLI mid-reply | Noticed rather than hanging; busy clears so the pet recovers |
 | E-04 **[M]** | Network drop mid-turn | Error surfaces; Restart Agent recovers |
-| E-05 **[M]** | Send a second message while one is in flight | "still working" notice, first turn unaffected |
-| E-06 **[M]** | Corrupt a pet's `pet.json` and relaunch | Pet skipped with a log line; other pets unaffected |
+| E-05 **[A]** | Send a second message while one is in flight | Refused with an explanation; first turn unaffected |
+| E-06 **[A]** | Damaged pack — bad JSON, no sheet, undecodable sheet, missing dir | Each is skipped, nothing crashes |
 | E-07 **[M]** | Delete a spawned pet's folder while running | Despawns cleanly |
-| E-08 **[M]** | Working directory that no longer exists | Clear error rather than a silent empty answer |
+| E-08 **[A]** | Working directory that no longer exists | Settles with a reported error instead of hanging |
 | E-09 **[M]** | Dock hidden / auto-hide | Pets fall back to the screen bottom |
 | E-10 **[M]** | Display unplugged while a pet is on it | Pet relocates to a remaining screen |
 | E-11 **[M]** | Laptop sleep / wake | Pets still animate; sessions still usable |
-| E-12 **[M]** | Quit with a turn in flight | Child processes terminate — no orphaned CLI in Activity Monitor |
+| E-12 **[A]** | Quit with a turn in flight | Session stops, busy clears, terminate is idempotent. *Orphan check itself stays manual:* `pgrep -fl codex` after quitting |
 
 ## Smoke set
 

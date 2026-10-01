@@ -40,6 +40,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             NSApp.setActivationPolicy(.prohibited)
             FeatureSelfTest.run()
         }
+        if CommandLine.arguments.contains("--self-test-edges") {
+            NSApp.setActivationPolicy(.prohibited)
+            let args = CommandLine.arguments
+            var provider = AgentProvider.codex
+            if let i = args.firstIndex(of: "--provider"), i + 1 < args.count,
+               let parsed = AgentProvider(rawValue: args[i + 1]) {
+                provider = parsed
+            }
+            EdgeSelfTest.run(provider: provider)
+        }
 
         NSApp.setActivationPolicy(.accessory)
         PetLibrary.clearLegacyPinnedOrigins()
