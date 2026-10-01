@@ -8,6 +8,8 @@
 
 /* Begin PBXBuildFile section */
 		A10000010000000000000001 /* LilAgentsApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000020000000000000001 /* LilAgentsApp.swift */; };
+		A10000010000000000000049 /* NotchShelfView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000020000000000000049 /* NotchShelfView.swift */; };
+		A10000010000000000000048 /* NotchCommandCentre.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000020000000000000048 /* NotchCommandCentre.swift */; };
 		A10000010000000000000005 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A10000020000000000000007 /* Assets.xcassets */; };
 		A10000010000000000000010 /* Sounds in Resources */ = {isa = PBXBuildFile; fileRef = A10000020000000000000010 /* Sounds */; };
 		A10000010000000000000020 /* PopoverTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000020000000000000020 /* PopoverTheme.swift */; };
@@ -37,6 +39,8 @@
 
 /* Begin PBXFileReference section */
 		A10000020000000000000001 /* LilAgentsApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LilAgentsApp.swift; sourceTree = "<group>"; };
+		A10000020000000000000049 /* NotchShelfView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotchShelfView.swift; sourceTree = "<group>"; };
+		A10000020000000000000048 /* NotchCommandCentre.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotchCommandCentre.swift; sourceTree = "<group>"; };
 		A10000020000000000000003 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		A10000020000000000000004 /* MiniPetAgents.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = MiniPetAgents.entitlements; sourceTree = "<group>"; };
 		A10000020000000000000007 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
@@ -90,6 +94,8 @@
 			isa = PBXGroup;
 			children = (
 				A10000020000000000000001 /* LilAgentsApp.swift */,
+				A10000020000000000000049 /* NotchShelfView.swift */,
+				A10000020000000000000048 /* NotchCommandCentre.swift */,
 				A10000020000000000000025 /* LilAgentsController.swift */,
 				A10000020000000000000024 /* WalkerCharacter.swift */,
 				A10000020000000000000040 /* PetPack.swift */,
@@ -205,6 +211,8 @@
 			buildActionMask = 2147483647;
 			files = (
 				A10000010000000000000001 /* LilAgentsApp.swift in Sources */,
+				A10000010000000000000049 /* NotchShelfView.swift in Sources */,
+				A10000010000000000000048 /* NotchCommandCentre.swift in Sources */,
 				A10000010000000000000025 /* LilAgentsController.swift in Sources */,
 				A10000010000000000000024 /* WalkerCharacter.swift in Sources */,
 				A10000010000000000000040 /* PetPack.swift in Sources */,

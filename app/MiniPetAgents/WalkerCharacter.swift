@@ -593,6 +593,13 @@ class WalkerCharacter {
         updateThinkingBubble()
     }
 
+    /// The sprite frame currently on screen, for surfaces that render the pet
+    /// outside its own window — the notch shelf draws the real animated pet
+    /// rather than a separate icon set, so the two can never disagree.
+    func currentSpriteFrame() -> NSImage? {
+        animator?.currentFrameImage ?? (spriteLayer?.contents as? NSImage)
+    }
+
     // MARK: - Alpha hit testing
 
     /// Opacity of the on-screen sprite at `point`, expressed in sprite-layer
