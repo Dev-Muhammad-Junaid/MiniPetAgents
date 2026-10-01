@@ -139,9 +139,8 @@ class CursorSession: AgentSession {
             let data = handle.availableData
             guard !data.isEmpty, let text = String(data: data, encoding: .utf8) else { return }
             DispatchQueue.main.async {
-                let lower = text.lowercased()
-                if lower.contains("not logged in") || lower.contains("unauthorized") || lower.contains("login required") {
-                    self?.onError?("Not logged in to Cursor.\n\nOpen Terminal and run:\n  cursor-agent login\n\nThen come back and chat here.")
+                if looksLikeAuthFailure(text) {
+                    self?.onError?(AgentProvider.cursor.notSignedInMessage)
                 } else {
                     self?.onError?(text)
                 }

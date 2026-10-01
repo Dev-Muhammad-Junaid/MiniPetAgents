@@ -118,6 +118,53 @@ enum AgentProvider: String, CaseIterable {
         default:      return []
         }
     }
+
+    /// What to tell the user when this CLI reports they aren't signed in.
+    var signInHint: String {
+        switch self {
+        case .claude:  return "Open Terminal and run:\n  claude\nthen use /login."
+        case .codex:   return "Open Terminal and run:\n  codex login"
+        case .copilot: return "Open Terminal and run:\n  copilot\nthen use /login."
+        case .cursor:  return "Open Terminal and run:\n  cursor-agent login"
+        case .gemini:  return "Open Terminal and run:\n  agy login"
+        }
+    }
+
+    /// Friendly, actionable replacement for a raw CLI auth error.
+    var notSignedInMessage: String {
+        "Not signed in to \(displayName).\n\n\(signInHint)\n\nThen come back and chat here."
+    }
+}
+
+// MARK: - Authentication failures
+
+/// Substrings that mean "the user isn't signed in to this CLI".
+///
+/// Centralised because every CLI words this differently *and* rewords it
+/// between releases. Cursor moved from "not logged in" to "Authentication
+/// required", which silently turned its friendly sign-in hint into dead code —
+/// the pet showed a raw stderr dump instead. Codex, Copilot and Gemini had no
+/// detection at all. One list, checked by `scripts/check-agents.py`.
+let authFailureMarkers: [String] = [
+    "not logged in",
+    "not authenticated",
+    "login required",
+    "authentication required",
+    "unauthenticated",
+    "unauthorized",
+    "please run /login",
+    "please log in",
+    "please sign in",
+    "sign in to continue",
+    "no credentials",
+    "invalid api key",
+    "missing api key",
+]
+
+/// True when CLI output looks like a sign-in problem rather than a real error.
+func looksLikeAuthFailure(_ text: String) -> Bool {
+    let lower = text.lowercased()
+    return authFailureMarkers.contains { lower.contains($0) }
 }
 
 // MARK: - Model listing (best-effort)
