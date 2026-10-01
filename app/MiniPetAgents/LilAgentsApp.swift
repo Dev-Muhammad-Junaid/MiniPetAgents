@@ -36,6 +36,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             }
             AgentSelfTest.run(only: only, timeout: timeout)
         }
+        if CommandLine.arguments.contains("--self-test-features") {
+            NSApp.setActivationPolicy(.prohibited)
+            FeatureSelfTest.run()
+        }
 
         NSApp.setActivationPolicy(.accessory)
         PetLibrary.clearLegacyPinnedOrigins()

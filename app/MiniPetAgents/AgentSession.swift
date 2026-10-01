@@ -494,3 +494,184 @@ enum AgentSelfTest {
         return String(flat.prefix(110))
     }
 }
+
+// MARK: - Headless feature self-test
+//
+// NOTE: this and AgentSelfTest should live in their own SelfTest.swift. They're
+// here because adding a file means editing project.pbxproj by hand, which is
+// worth doing deliberately rather than in passing.
+
+/// Everything about the app that can be checked without a window or a pointer:
+/// sprite packs, the hit-test geometry, preference round-trips, and the string
+/// matchers that decide what the user is shown when a CLI misbehaves.
+///
+///     "…/Mini Pet Agents" --self-test-features
+enum FeatureSelfTest {
+    /// Canonical petdex row lengths. The padding past these is blank.
+    private static let canonical: [(PetState, Int)] = [
+        (.idle, 6), (.runRight, 8), (.runLeft, 8), (.waving, 4), (.jumping, 5),
+        (.failed, 8), (.waiting, 6), (.running, 6), (.review, 6),
+    ]
+
+    private static var failures = 0
+    private static var checks = 0
+
+    static func run() -> Never {
+        setvbuf(stdout, nil, _IONBF, 0)
+        print("")
+        spritePacks()
+        hitGeometry()
+        preferences()
+        matchers()
+        print("")
+        print(failures == 0
+              ? "All \(checks) feature checks passed."
+              : "\(failures) of \(checks) feature checks failed.")
+        fflush(stdout)
+        exit(failures == 0 ? 0 : 1)
+    }
+
+    // MARK: checks
+
+    private static func spritePacks() {
+        section("sprite packs")
+        let pets = PetLibrary.shared.pets
+        guard !pets.isEmpty else { return skip("no pets installed") }
+
+        for pet in pets {
+            guard let pack = PetPack.load(from: pet.folderURL) else {
+                fail("\(pet.slug): pack failed to load"); continue
+            }
+            for (state, expected) in canonical {
+                guard let frames = pack.frames[state] else {
+                    fail("\(pet.slug): missing \(state.rawValue)"); continue
+                }
+                expect(frames.count == expected,
+                       "\(pet.slug) \(state.rawValue): \(frames.count) frames, expected \(expected)")
+
+                // The blank-frame bug: a padded cell inside the animation makes
+                // the pet vanish for a beat at the end of every cycle.
+                var blank: [Int] = []
+                for (i, img) in frames.enumerated() {
+                    var r = CGRect(origin: .zero, size: img.size)
+                    guard let cg = img.cgImage(forProposedRect: &r, context: nil, hints: nil) else { continue }
+                    if SpriteHitGeometry.isBlank(cg) { blank.append(i) }
+                }
+                expect(blank.isEmpty, blank.isEmpty
+                       ? "\(pet.slug) \(state.rawValue): no blank frames"
+                       : "\(pet.slug) \(state.rawValue): blank frame(s) at \(blank) — pet will blink out")
+            }
+        }
+    }
+
+    private static func hitGeometry() {
+        section("hit testing")
+        guard let pet = PetLibrary.shared.pets.first,
+              let pack = PetPack.load(from: pet.folderURL),
+              let first = pack.frames[.idle]?.first else { return skip("no pet to sample") }
+        var r = CGRect(origin: .zero, size: first.size)
+        guard let cg = first.cgImage(forProposedRect: &r, context: nil, hints: nil) else {
+            return fail("idle frame has no CGImage")
+        }
+
+        // A square window around a taller-than-wide frame letterboxes left and
+        // right; those columns must not accept clicks.
+        let box = CGSize(width: 96, height: 96)
+        expect(SpriteHitGeometry.alpha(of: cg, atLayerPoint: CGPoint(x: 0.5, y: 48), layerSize: box) == 0,
+               "left letterbox column should be transparent")
+        expect(SpriteHitGeometry.alpha(of: cg, atLayerPoint: CGPoint(x: 95.5, y: 48), layerSize: box) == 0,
+               "right letterbox column should be transparent")
+        expect(SpriteHitGeometry.alpha(of: cg, atLayerPoint: CGPoint(x: -1, y: 48), layerSize: box) == 0,
+               "points outside the layer should be transparent")
+
+        // The sprite's own body must be hittable, or clicking a pet does nothing.
+        var opaque = 0
+        for y in stride(from: 4, to: 92, by: 4) {
+            for x in stride(from: 4, to: 92, by: 4) {
+                if SpriteHitGeometry.alpha(of: cg, atLayerPoint: CGPoint(x: CGFloat(x), y: CGFloat(y)),
+                                           layerSize: box) > 30.0 / 255.0 { opaque += 1 }
+            }
+        }
+        expect(opaque > 60, "sprite body should be broadly clickable (got \(opaque) opaque sample points)")
+
+        // Orientation: a petdex sprite stands on the ground, so the bottom half
+        // of the frame carries more ink than the very top. A vertical flip in
+        // the mapping shows up here.
+        func inkRow(_ y: CGFloat) -> Int {
+            stride(from: 4, to: 92, by: 2).reduce(0) {
+                $0 + (SpriteHitGeometry.alpha(of: cg, atLayerPoint: CGPoint(x: CGFloat($1), y: y),
+                                              layerSize: box) > 0.1 ? 1 : 0)
+            }
+        }
+        expect(inkRow(20) >= inkRow(92), "sprite should be denser near its feet than above its head (flip check)")
+    }
+
+    private static func preferences() {
+        section("preferences")
+        let slug = "selftest-pet"
+        let before = PetLibrary.preferredPlacement(for: slug)
+
+        for mode in PlacementMode.allCases {
+            PetLibrary.setPreferredPlacement(mode, for: slug)
+            expect(PetLibrary.preferredPlacement(for: slug) == mode,
+                   "placement \(mode.rawValue) should round-trip")
+        }
+        PetLibrary.setPreferredModel("some-model", for: slug)
+        expect(PetLibrary.preferredModel(for: slug) == "some-model", "model should round-trip")
+        PetLibrary.setPreferredModel(nil, for: slug)
+        expect(PetLibrary.preferredModel(for: slug) == nil, "clearing the model should stick")
+
+        // Removed option values linger in UserDefaults from older builds —
+        // `alwaysWalk` was a real MovementMode until it was dropped. Resolving
+        // one must fall back, not crash or return something unusable.
+        UserDefaults.standard.set("alwaysWalk", forKey: "pet.\(slug).movementMode")
+        let resolved = PetLibrary.resolvedMovementMode(for: slug)
+        expect(MovementMode.allCases.contains(resolved),
+               "a removed movementMode value should fall back to a valid mode (got \(resolved.rawValue))")
+        UserDefaults.standard.set("ludicrous", forKey: "pet.\(slug).walkSpeed")
+        expect(WalkSpeed.allCases.contains(PetLibrary.resolvedWalkSpeed(for: slug)),
+               "an unknown walkSpeed should fall back to a valid speed")
+
+        for suffix in ["placement", "model", "movementMode", "walkSpeed"] {
+            UserDefaults.standard.removeObject(forKey: "pet.\(slug).\(suffix)")
+        }
+        PetLibrary.setPreferredPlacement(before, for: slug)
+        UserDefaults.standard.removeObject(forKey: "pet.\(slug).placement")
+    }
+
+    private static func matchers() {
+        section("error matchers")
+        // The app's own sign-in message has to satisfy its own matcher, or a
+        // signed-out provider shows a raw stderr dump instead of guidance.
+        for provider in AgentProvider.allCases {
+            expect(looksLikeAuthFailure(provider.notSignedInMessage),
+                   "\(provider.rawValue): its own sign-in message should match the auth matcher")
+        }
+        // Real wording seen in the wild.
+        for sample in ["Error: Authentication required. Please run 'agent login' first.",
+                       "You are not logged in. Please run /login",
+                       "401 Unauthorized"] {
+            expect(looksLikeAuthFailure(sample), "should recognise: \(sample)")
+        }
+        expect(!looksLikeAuthFailure("file not found: config.toml"),
+               "an ordinary error should not be read as a sign-in problem")
+
+        expect(meaningfulStderr("Reading additional input from stdin...") == nil,
+               "codex stdin chatter should be dropped entirely")
+        expect(meaningfulStderr("Reading additional input from stdin...\nError: boom") == "Error: boom",
+               "a real error alongside chatter should survive")
+        expect(meaningfulStderr("   \n  \n") == nil, "whitespace-only stderr should be dropped")
+        expect(meaningfulStderr("Error: boom") == "Error: boom", "a real error should pass through")
+    }
+
+    // MARK: harness
+
+    private static func section(_ name: String) { print("  \(name)") }
+    private static func skip(_ why: String) { print("    skip  \(why)") }
+    private static func fail(_ why: String) { failures += 1; checks += 1; print("    FAIL  \(why)") }
+    private static func expect(_ condition: Bool, _ description: String) {
+        checks += 1
+        if condition { print("    ok    \(description)") }
+        else { failures += 1; print("    FAIL  \(description)") }
+    }
+}

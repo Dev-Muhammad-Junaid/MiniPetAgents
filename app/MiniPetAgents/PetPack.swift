@@ -368,3 +368,72 @@ final class SpriteAnimator {
         }
     }
 }
+
+
+// MARK: - Sprite hit geometry
+
+/// Pure geometry for "did the pointer land on the drawn pet, or on the
+/// transparent gap around it". Split out of `WalkerCharacter` so it can be
+/// exercised headlessly — this is the app's core interaction and a sign error
+/// here silently breaks every click and drag.
+enum SpriteHitGeometry {
+    /// Map a point in sprite-layer coordinates (origin bottom-left) to a pixel
+    /// in the frame image (origin top-left), mirroring
+    /// `contentsGravity = .resizeAspect`: scale to fit, centre the remainder.
+    /// Returns nil when the point falls in the letterbox margin.
+    static func imagePixel(forLayerPoint point: CGPoint,
+                           imageWidth: Int, imageHeight: Int,
+                           layerSize: CGSize) -> (x: Int, y: Int)? {
+        guard imageWidth > 0, imageHeight > 0,
+              layerSize.width > 0, layerSize.height > 0 else { return nil }
+        let scale = min(layerSize.width / CGFloat(imageWidth),
+                        layerSize.height / CGFloat(imageHeight))
+        let drawnW = CGFloat(imageWidth) * scale
+        let drawnH = CGFloat(imageHeight) * scale
+        let localX = point.x - (layerSize.width - drawnW) / 2
+        let localY = point.y - (layerSize.height - drawnH) / 2
+        guard localX >= 0, localY >= 0, localX < drawnW, localY < drawnH else { return nil }
+        return (min(imageWidth - 1, max(0, Int(localX / scale))),
+                min(imageHeight - 1, max(0, Int((drawnH - localY) / scale))))
+    }
+
+    /// Read one pixel's alpha by drawing the image into a 1x1 ARGB context
+    /// positioned so the wanted pixel lands on the context's only slot.
+    static func alpha(of image: CGImage, x: Int, yFromTop: Int) -> CGFloat? {
+        var pixel: [UInt8] = [0, 0, 0, 0]
+        guard let ctx = CGContext(data: &pixel, width: 1, height: 1,
+                                  bitsPerComponent: 8, bytesPerRow: 4,
+                                  space: CGColorSpaceCreateDeviceRGB(),
+                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+        else { return nil }
+        ctx.draw(image, in: CGRect(x: CGFloat(-x),
+                                   y: CGFloat(-(image.height - 1 - yFromTop)),
+                                   width: CGFloat(image.width),
+                                   height: CGFloat(image.height)))
+        return CGFloat(pixel[3]) / 255.0
+    }
+
+    /// Alpha of the drawn sprite at a layer point. 0 in the letterbox margin.
+    static func alpha(of image: CGImage, atLayerPoint point: CGPoint,
+                      layerSize: CGSize) -> CGFloat {
+        guard let px = imagePixel(forLayerPoint: point,
+                                  imageWidth: image.width, imageHeight: image.height,
+                                  layerSize: layerSize) else { return 0 }
+        return alpha(of: image, x: px.x, yFromTop: px.y) ?? 0
+    }
+
+    /// True when a frame is entirely transparent. petdex rows are padded to the
+    /// sheet width, and looping through that padding is what made pets blink
+    /// out of existence at the end of a cycle.
+    static func isBlank(_ image: CGImage, samples: Int = 24) -> Bool {
+        let w = image.width, h = image.height
+        guard w > 0, h > 0 else { return true }
+        for iy in 0..<samples {
+            for ix in 0..<samples {
+                let x = w * ix / samples, y = h * iy / samples
+                if let a = alpha(of: image, x: x, yFromTop: y), a > 0.12 { return false }
+            }
+        }
+        return true
+    }
+}

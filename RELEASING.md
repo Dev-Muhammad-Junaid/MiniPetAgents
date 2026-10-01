@@ -13,10 +13,17 @@ pet reports an error mid-conversation. Gate on this:
 
 ```bash
 ./scripts/check-agents.py --live
-"$(ls -d ~/Library/Developer/Xcode/DerivedData/MiniPetAgents-*/Build/Products/Debug/'Mini Pet Agents.app' | head -1)/Contents/MacOS/Mini Pet Agents" --self-test-agents
+APP="$(ls -dt ~/Library/Developer/Xcode/DerivedData/MiniPetAgents-*/Build/Products/Debug/'Mini Pet Agents.app' | head -1)/Contents/MacOS/Mini Pet Agents"
+"$APP" --self-test-features
+"$APP" --self-test-agents
 ```
 
-The first checks the CLIs accept our arguments. The second drives a real turn
+`ls -dt` matters: several DerivedData folders can exist and only the newest is
+the build you just made.
+
+The first checks the CLIs accept our arguments. `--self-test-features` checks
+the logic that has no window — sprite packs, hit geometry, preference
+round-trips, error matchers. `--self-test-agents` drives a real turn
 through the app's own session classes — argv, streaming, output parsing, turn
 completion — which is the only way to catch a provider that accepts every flag
 and then sends back something we no longer understand.

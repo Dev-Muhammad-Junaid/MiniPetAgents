@@ -8,9 +8,10 @@ Three levels, cheapest first:
 |---|---|---|
 | CLI contract | `./scripts/check-agents.py` | the arguments we pass are still accepted |
 | Session layer | `"…/Mini Pet Agents" --self-test-agents` | a real turn through the app's own session classes |
-| Manual | this document | anything involving a window, a sprite or a pointer |
+| Feature logic | `"…/Mini Pet Agents" --self-test-features` | sprite packs, hit geometry, preferences, error matchers (116 checks) |
+| Manual | this document | anything that needs a window, a sprite in motion or a pointer |
 
-The first two are automated and should gate a release (`RELEASING.md` step 0).
+The first three are automated and gate a release (`RELEASING.md` step 0).
 The manual cases below are the ones no script can reach — if you only have ten
 minutes, run the **smoke** set.
 
@@ -45,7 +46,7 @@ Legend: **[A]** automated · **[M]** manual · **[S]** in the smoke set.
 | G-02 **[M]** | Toggle Spawn on / off | Pet appears / disappears immediately |
 | G-03 **[M]** | Quit and relaunch | Spawned pets come back where they were |
 | G-04 **[M]** | Delete a pet | Confirmation, then gone from disk and list |
-| G-05 **[M]** | Change size (per-pet and app default) | Sprite rescales, stays crisp (nearest-neighbour) |
+| G-05 **[M]** | Change size (per-pet and app default) | Sprite rescales, stays crisp (nearest-neighbour); prefs round-trip covered by **[A]** |
 | G-06 **[M]** | Install a second pet of the same slug | No duplicate row, no double spawn |
 
 ## 3. Placement and movement
@@ -53,7 +54,7 @@ Legend: **[A]** automated · **[M]** manual · **[S]** in the smoke set.
 | ID | Case | Expected |
 |---|---|---|
 | M-01 **[M][S]** | Dock placement, watch 60s | Paces, turns at both ends, no freeze between legs |
-| M-02 **[M][S]** | Watch one full animation cycle | Never blinks out — the blank-trailing-frame bug |
+| M-02 **[A]** | Every frame of every state is non-blank | `--self-test-features` names the offending frame indices |
 | M-03 **[M]** | Free roam | Wanders the whole visible frame, stays inside it |
 | M-04 **[M]** | Left / right stack | Sits against that edge, multiple pets stack without overlap |
 | M-05 **[M]** | Drag a pet slowly, drop on the dock | Drop-zone overlay highlights; pet re-homes to dock |
@@ -78,7 +79,7 @@ Legend: **[A]** automated · **[M]** manual · **[S]** in the smoke set.
 |---|---|---|
 | H-01 **[M][S]** | Hover a pet | Waving loop, held while the cursor is over it, no vertical hop |
 | H-02 **[M][S]** | Click the sprite body | Chat opens |
-| H-03 **[M][S]** | Click a transparent corner of the pet's window | Click passes through to whatever is behind — the alpha hit test |
+| H-03 **[A]** | Letterbox columns reject clicks, sprite body accepts them, no vertical flip | `--self-test-features` hit-geometry section |
 | H-04 **[M]** | Hover while chat is open | No waving; chat state wins |
 | H-05 **[M]** | Click the completion bubble | Bubble dismisses, pet resumes its mood loop |
 
@@ -98,7 +99,7 @@ These are the ones that bite real users. Most are reachable by hand in a minute.
 
 | ID | Case | Expected |
 |---|---|---|
-| E-01 **[A]** | Provider CLI not signed in | Friendly sign-in prompt naming the exact command — not a raw stderr dump |
+| E-01 **[A]** | Provider CLI not signed in | Friendly sign-in prompt naming the exact command — not a raw stderr dump. Each provider's own message is asserted against the matcher |
 | E-02 **[M]** | Provider CLI not installed | Clear message with install instructions |
 | E-03 **[M]** | Kill the CLI mid-reply (`pkill -f codex`) | Pet reports the failure and recovers; no crash, no stuck thinking pose |
 | E-04 **[M]** | Network drop mid-turn | Error surfaces; Restart Agent recovers |
@@ -114,11 +115,12 @@ These are the ones that bite real users. Most are reachable by hand in a minute.
 ## Smoke set
 
 The ten-minute pass before tagging a release. Run both scripts, then:
-P-03, G-01, M-01, M-02, T-01, H-01, H-02, H-03.
+P-03, G-01, M-01, T-01, H-01, H-02. (M-02 and H-03 are automated now.)
 
 ## Not covered
 
 No unit tests and no UI automation. The app is `LSUIElement`, so it is invisible
 to macOS UI-automation tooling unless accessibility access is granted, and the
 sprite behaviour it would need to assert on is visual. Everything mechanical
-that *can* be automated is in the two scripts; the rest is deliberately manual.
+that *can* be automated is in the three suites; what remains is motion and
+pointer behaviour, which needs eyes.

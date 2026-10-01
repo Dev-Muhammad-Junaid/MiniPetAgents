@@ -617,40 +617,9 @@ class WalkerCharacter {
 
         let box = spriteLayer.bounds
         guard box.width > 0, box.height > 0 else { return nil }
-
-        // `contentsGravity = .resizeAspect` scales the frame to fit the layer
-        // and centres the leftover — mirror that here or clicks land off by
-        // the letterbox margin (sprite frames are 192x208 inside a square
-        // window, so the margin is real).
-        let scale = min(box.width / CGFloat(cg.width), box.height / CGFloat(cg.height))
-        let drawnW = CGFloat(cg.width) * scale
-        let drawnH = CGFloat(cg.height) * scale
-        let localX = point.x - (box.width - drawnW) / 2
-        let localY = point.y - (box.height - drawnH) / 2
-        guard localX >= 0, localY >= 0, localX < drawnW, localY < drawnH else { return 0 }
-
-        // Layer coords run bottom-up; CGImage rows run top-down.
-        let px = min(cg.width - 1, max(0, Int(localX / scale)))
-        let py = min(cg.height - 1, max(0, Int((drawnH - localY) / scale)))
-        return WalkerCharacter.alpha(of: cg, x: px, yFromTop: py)
+        return SpriteHitGeometry.alpha(of: cg, atLayerPoint: point, layerSize: box.size)
     }
 
-    /// Read one pixel's alpha by drawing the image into a 1x1 ARGB context
-    /// positioned so the wanted pixel lands on the context's only slot.
-    /// Core Graphics clips the rest, so this stays cheap regardless of sheet size.
-    private static func alpha(of image: CGImage, x: Int, yFromTop: Int) -> CGFloat? {
-        var pixel: [UInt8] = [0, 0, 0, 0]
-        guard let ctx = CGContext(data: &pixel, width: 1, height: 1,
-                                  bitsPerComponent: 8, bytesPerRow: 4,
-                                  space: CGColorSpaceCreateDeviceRGB(),
-                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
-        else { return nil }
-        ctx.draw(image, in: CGRect(x: CGFloat(-x),
-                                   y: CGFloat(-(image.height - 1 - yFromTop)),
-                                   width: CGFloat(image.width),
-                                   height: CGFloat(image.height)))
-        return CGFloat(pixel[3]) / 255.0
-    }
 
     /// Keeps walk sprite frames aligned with movement along the dock (0…1).
     /// No-op: walk frames now cycle at the sprite's natural FPS (set by the
