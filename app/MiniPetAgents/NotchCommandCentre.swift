@@ -20,11 +20,19 @@ final class NotchCommandCentre {
 
     // MARK: Geometry
 
-    /// Width of the resting shelf either side of the notch cut-out.
-    private static let restingWidth: CGFloat = 420
+    /// At rest the shelf must not be wider than the hardware notch, or it
+    /// eats menu-bar items either side of it — which it did at a fixed 420pt,
+    /// covering the Window menu. On a notched Mac it matches the cut-out, so
+    /// resting costs the user nothing; elsewhere it falls back to a narrow
+    /// strip that reads as a deliberate tab rather than a bar across the menu.
+    private static let restingFallbackWidth: CGFloat = 168
     private static let restingHeight: CGFloat = 36
     private static let expandedWidth: CGFloat = 620
-    private static let expandedHeight: CGFloat = 188
+    /// Activity needs room for several rows; Pets does not. Height follows the
+    /// mode so neither one is padded out to fit the other.
+    private static func expandedHeight(for mode: NotchShelfView.Mode) -> CGFloat {
+        mode == .activity ? 320 : 188
+    }
     /// Hover has to be deliberate — without a delay the shelf flickers open
     /// every time the pointer crosses the top of the screen on its way
     /// somewhere else.
@@ -37,8 +45,14 @@ final class NotchCommandCentre {
     private var hostView: NotchShelfView?
     private var hoverTimer: Timer?
 
+    private var feedObserver: NSObjectProtocol?
+
     init(controller: PetAgentsController) {
         self.controller = controller
+        feedObserver = NotificationCenter.default.addObserver(
+            forName: ActivityStore.didChange, object: nil, queue: .main) { [weak self] _ in
+                self?.refresh()
+            }
     }
 
     /// Height of the hardware notch, or 0 on a screen without one.
@@ -55,9 +69,21 @@ final class NotchCommandCentre {
         return max(0, right.minX - left.maxX)
     }
 
+    /// Resting width: the hardware cut-out where there is one, so the shelf
+    /// costs the user no menu-bar space at all.
+    private static func restingWidth(on screen: NSScreen) -> CGFloat {
+        let notch = notchWidth(for: screen)
+        return notch > 0 ? notch : restingFallbackWidth
+    }
+
     private func frame(on screen: NSScreen, expanded: Bool) -> NSRect {
-        let w = expanded ? Self.expandedWidth : Self.restingWidth
-        let h = expanded ? Self.expandedHeight : Self.restingHeight
+        let w = expanded ? Self.expandedWidth : Self.restingWidth(on: screen)
+        // Resting, the shelf is exactly as tall as the notch so it disappears
+        // into it; expanded it drops below the menu bar.
+        let notchH = Self.notchHeight(for: screen)
+        let h = expanded
+            ? Self.expandedHeight(for: hostView?.mode ?? .pets)
+            : max(Self.restingHeight, notchH)
         // Pinned to the very top of the full frame, not visibleFrame: the
         // shelf must run under the menu bar to meet the notch.
         return NSRect(x: screen.frame.midX - w / 2,
@@ -93,6 +119,7 @@ final class NotchCommandCentre {
 
         let view = NotchShelfView(frame: NSRect(origin: .zero, size: win.frame.size))
         view.onHoverChanged = { [weak self] inside in self?.hoverChanged(inside) }
+        view.onModeChanged = { [weak self] _ in self?.resizeForMode() }
         win.contentView = view
 
         window = win
@@ -133,6 +160,22 @@ final class NotchCommandCentre {
         refresh()
     }
 
+    /// A mode change can change the shelf's height; animate it the same way
+    /// the open does, so the two never look like different mechanisms.
+    private func resizeForMode() {
+        guard isExpanded, let window = window,
+              let screen = window.screen ?? NSScreen.main else { return }
+        let target = frame(on: screen, expanded: true)
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0.2
+            ctx.timingFunction = CAMediaTimingFunction(controlPoints: 0.22, 1.1, 0.3, 1)
+            ctx.allowsImplicitAnimation = true
+            window.animator().setFrame(target, display: true)
+        }
+        hostView?.setExpanded(true, size: target.size)
+        refresh()
+    }
+
     // MARK: Content
 
     /// Push the current roster into the shelf. Cheap enough to call per tick.
@@ -146,6 +189,42 @@ final class NotchCommandCentre {
                                         isBusy: pet.isAgentBusy)
         }
         view.update(entries: pets)
+
+        let store = ActivityStore.shared
+        let bySlug = Dictionary(uniqueKeysWithValues: controller.characters.map { ($0.petSlug, $0) })
+        let rows = store.records.prefix(12).map { record -> NotchShelfView.ActivityRow in
+            NotchShelfView.ActivityRow(
+                name: record.petSlug,
+                provider: record.provider.displayName,
+                activity: record.activity,
+                state: record.state,
+                trailing: Self.trailing(for: record),
+                remedy: record.remedy?.title,
+                tint: Self.tint(for: record.state),
+                image: bySlug[record.petSlug]?.currentSpriteFrame())
+        }
+        let totals = store.totals()
+        view.update(rows: Array(rows),
+                    summary: totals.turns == 0 ? ""
+                        : "last 20 min · \(totals.turns) turns\(totals.failures > 0 ? " · \(totals.failures) failed" : "")")
+    }
+
+    /// Duration plus whatever the provider said about usage — never a number
+    /// we worked out ourselves.
+    static func trailing(for record: ActivityStore.Record) -> String {
+        let seconds = Int(record.duration.rounded())
+        let time = seconds >= 60 ? "\(seconds / 60)m \(seconds % 60)s" : "\(seconds)s"
+        guard let usage = record.usageNote, !usage.isEmpty else { return time }
+        return "\(time) · \(usage)"
+    }
+
+    static func tint(for state: ActivityStore.Record.State) -> NSColor {
+        switch state {
+        case .live:        return NSColor(srgbRed: 0.81, green: 0.89, blue: 0.96, alpha: 1)
+        case .done:        return NSColor(srgbRed: 0.18, green: 0.84, blue: 0.66, alpha: 1)
+        case .failed:      return NSColor(srgbRed: 1.00, green: 0.23, blue: 0.36, alpha: 1)
+        case .interrupted: return NSColor(white: 0.55, alpha: 1)
+        }
     }
 
     /// Status is carried by one colour per state — the same vocabulary the
@@ -162,5 +241,6 @@ final class NotchCommandCentre {
 
     deinit {
         hoverTimer?.invalidate()
+        if let feedObserver { NotificationCenter.default.removeObserver(feedObserver) }
     }
 }

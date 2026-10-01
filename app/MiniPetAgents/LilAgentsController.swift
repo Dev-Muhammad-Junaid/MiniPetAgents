@@ -15,6 +15,9 @@ final class PetAgentsController {
     var lastDockX: CGFloat = 0
     var lastDockWidth: CGFloat = 0
     var debugWindow: NSWindow?
+    /// The notch shelf. Created on start; it draws itself from the pets and
+    /// the activity feed, so the controller only has to keep it fed.
+    private(set) var notch: NotchCommandCentre?
     var pinnedScreenIndex: Int = -1
     private static let onboardingKey = "hasCompletedOnboarding"
     private var shiftFlagsLocalMonitor: Any?
@@ -27,6 +30,10 @@ final class PetAgentsController {
 
         startDisplayLink()
         setupDebugLine()
+
+        let centre = NotchCommandCentre(controller: self)
+        notch = centre
+        if let screen = activeScreen { centre.show(on: screen) }
 
         NotificationCenter.default.addObserver(forName: PetLibrary.layoutPreferencesDidChange,
                                                object: nil, queue: .main) { [weak self] _ in
@@ -297,6 +304,10 @@ final class PetAgentsController {
 
         // (Pets pass through each other on the dock — no greet-on-collision,
         //  no sibling separation.)
+
+        // Keep the shelf in step with the pets. It only redraws when something
+        // it shows has actually changed, so this is cheap per tick.
+        notch?.refresh()
 
         let sorted = activeChars.sorted { $0.positionProgress < $1.positionProgress }
         for (i, char) in sorted.enumerated() {

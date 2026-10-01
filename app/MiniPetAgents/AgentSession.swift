@@ -813,6 +813,18 @@ enum FeatureSelfTest {
             fail("the feed failed to encode or decode")
         }
 
+        // Row formatting: time is ours to compute, usage is the provider's.
+        let e = store.beginTurn(petSlug: "pet-e", provider: .claude)
+        var rec = store.records.first!
+        expect(NotchCommandCentre.trailing(for: rec).hasSuffix("s"),
+               "a turn with no usage line shows only its duration")
+        store.noteUsage("2.1k · $0.04", for: e)
+        rec = store.records.first!
+        expect(NotchCommandCentre.trailing(for: rec).contains("2.1k · $0.04"),
+               "the provider's usage line is passed through to the row verbatim")
+        expect(NotchCommandCentre.tint(for: .interrupted) != NotchCommandCentre.tint(for: .failed),
+               "interrupted and failed are visually distinct, not the same red")
+
         store.clear()
         expect(store.records.isEmpty, "clearing empties the feed")
     }
