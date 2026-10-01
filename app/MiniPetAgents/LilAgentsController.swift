@@ -105,6 +105,7 @@ final class PetAgentsController {
             // ensureSession wires callbacks + history persistence; previously
             // broadcast created bare sessions whose output went nowhere.
             char.ensureSession()
+            char.beginActivityTurn()
             char.session?.send(message: message)
             // Sessions append the user message synchronously; refresh any
             // open transcript so the broadcast prompt is visible.

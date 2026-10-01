@@ -525,6 +525,7 @@ enum FeatureSelfTest {
         matchers()
         brokenPacks()
         missingBinaries()
+        activityFeed()
         print("")
         print(failures == 0
               ? "All \(checks) feature checks passed."
@@ -712,6 +713,67 @@ enum FeatureSelfTest {
             expect(mentionsBinary || text.contains("http"),
                    "\(provider.rawValue): instructions name the binary or link somewhere")
         }
+    }
+
+    /// The Activity feed is only worth having if it never invents anything,
+    /// so these pin the honesty rules as much as the mechanics.
+    private static func activityFeed() {
+        section("activity feed")
+        let store = ActivityStore.shared
+        store.clear()
+
+        let a = store.beginTurn(petSlug: "pet-a", provider: .claude)
+        expect(store.records.first?.id == a, "a new turn lands at the top of the feed")
+        expect(store.records.first?.state == .live, "a new turn starts live")
+        expect(store.live.count == 1, "it counts as live")
+        expect(store.records.first?.activity == "Thinking",
+               "a turn with no tool activity says Thinking, not an invented description")
+
+        store.noteTool("Bash", detail: "npm test", for: a)
+        expect(store.records.first?.activity == "Bash · npm test",
+               "activity reads back the CLI's own tool and target")
+        store.noteTool("Read", detail: nil, for: a)
+        expect(store.records.first?.activity == "Read", "a tool with no detail shows just the tool")
+        expect(store.records.first?.toolCalls == 2, "tool calls are counted")
+
+        store.noteUsage("2.1k tokens · $0.04", for: a)
+        expect(store.records.first?.usageNote == "2.1k tokens · $0.04",
+               "the provider's usage line is stored verbatim, not re-derived")
+
+        store.complete(a)
+        expect(store.records.first?.state == .done, "completing moves the turn to done")
+        expect(store.records.first?.endedAt != nil, "completing stamps an end time")
+        expect(store.live.isEmpty, "a completed turn is no longer live")
+
+        // A turn that did nothing but reply should say so honestly.
+        let b = store.beginTurn(petSlug: "pet-b", provider: .codex)
+        store.complete(b)
+        expect(store.records.first?.activity == "Replied",
+               "a turn with no tools reports Replied rather than a made-up summary")
+
+        // Failures carry their own fix where we can name one.
+        let c = store.beginTurn(petSlug: "pet-c", provider: .cursor)
+        store.fail(c, message: "Error: Authentication required. Please run 'agent login' first.",
+                   provider: .cursor)
+        expect(store.records.first?.state == .failed, "a failed turn is marked failed")
+        expect(store.records.first?.remedy == .signIn(.cursor),
+               "a sign-in failure offers Sign in inline")
+
+        let d = store.beginTurn(petSlug: "pet-d", provider: .codex)
+        store.fail(d, message: "ENOENT: no such file or directory", provider: .codex)
+        expect(store.records.first?.remedy == nil,
+               "an ordinary failure offers no bogus remedy")
+
+        expect(ActivityStore.shortFailure("line one\nline two") == "line one",
+               "a failure row shows the first line only")
+        expect(ActivityStore.shortFailure(String(repeating: "x", count: 300)).count == 90,
+               "a long failure is truncated to fit one row")
+
+        let (turns, failures) = store.totals()
+        expect(turns == 4 && failures == 2, "totals count turns and failures across every pet")
+
+        store.clear()
+        expect(store.records.isEmpty, "clearing empties the feed")
     }
 
     // MARK: harness

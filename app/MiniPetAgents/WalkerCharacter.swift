@@ -258,6 +258,10 @@ class WalkerCharacter {
     private(set) var spriteState: PetState = .idle {
         didSet { if oldValue != spriteState { animator?.play(state: spriteState) } }
     }
+    /// The turn this pet currently has in flight, as the Activity feed knows
+    /// it. nil between turns.
+    private var activityTurn: UUID?
+
     /// CACurrentMediaTime() of the last session-callback-induced state change.
     /// `BehaviorPlanner` waits a quiet window after this before picking new states.
     private(set) var lastSessionEventTime: CFTimeInterval = 0
@@ -600,6 +604,33 @@ class WalkerCharacter {
         animator?.currentFrameImage ?? (spriteLayer?.contents as? NSImage)
     }
 
+    // MARK: - Activity feed
+
+    enum ActivityOutcome {
+        case completed
+        case failed(String)
+    }
+
+    /// Open a row in the Activity feed for the turn about to start. Called on
+    /// send rather than on the first event, so a turn that dies before it says
+    /// anything still shows up instead of vanishing silently.
+    func beginActivityTurn() {
+        guard activityTurn == nil else { return }
+        activityTurn = ActivityStore.shared.beginTurn(petSlug: petSlug,
+                                                      provider: resolvedProvider)
+    }
+
+    func endActivityTurn(_ outcome: ActivityOutcome) {
+        guard let turn = activityTurn else { return }
+        switch outcome {
+        case .completed:
+            ActivityStore.shared.complete(turn)
+        case .failed(let message):
+            ActivityStore.shared.fail(turn, message: message, provider: resolvedProvider)
+        }
+        activityTurn = nil
+    }
+
     // MARK: - Alpha hit testing
 
     /// Opacity of the on-screen sprite at `point`, expressed in sprite-layer
@@ -939,6 +970,7 @@ class WalkerCharacter {
         terminal.provider = provider
         terminal.autoresizingMask = [.width, .height]
         terminal.onSendMessage = { [weak self] message, attachments in
+            self?.beginActivityTurn()
             self?.session?.send(message: message, attachments: attachments)
             self?.setStopButtonVisible(true)
         }
@@ -1128,6 +1160,7 @@ class WalkerCharacter {
             self?.setSpriteState(.review, source: .session)
         }
         session.onTurnComplete = { [weak self] in
+            self?.endActivityTurn(.completed)
             self?.setStopButtonVisible(false)
             self?.terminalView?.endStreaming()
             self?.playCompletionSound()
@@ -1143,6 +1176,7 @@ class WalkerCharacter {
             }
         }
         session.onError = { [weak self] text in
+            self?.endActivityTurn(.failed(text))
             self?.setStopButtonVisible(false)
             self?.terminalView?.appendError(text)
             self?.setSpriteState(.failed, source: .session)
@@ -1150,6 +1184,9 @@ class WalkerCharacter {
         session.onToolUse = { [weak self] toolName, input in
             guard let self = self else { return }
             let summary = self.formatToolInput(input)
+            if let turn = self.activityTurn {
+                ActivityStore.shared.noteTool(toolName, detail: summary, for: turn)
+            }
             self.terminalView?.appendToolUse(toolName: toolName, summary: summary)
             self.setSpriteState(.review, source: .session)
         }
@@ -1157,7 +1194,11 @@ class WalkerCharacter {
             self?.terminalView?.appendToolResult(summary: summary, isError: isError)
         }
         session.onUsage = { [weak self] note in
-            self?.terminalView?.appendSystemNote(note)
+            guard let self = self else { return }
+            if let turn = self.activityTurn {
+                ActivityStore.shared.noteUsage(note, for: turn)
+            }
+            self.terminalView?.appendSystemNote(note)
         }
         session.onProviderCommands = { [weak self] cmds in
             self?.providerCommands = cmds
