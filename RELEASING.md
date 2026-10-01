@@ -13,10 +13,17 @@ pet reports an error mid-conversation. Gate on this:
 
 ```bash
 ./scripts/check-agents.py --live
+"$(ls -d ~/Library/Developer/Xcode/DerivedData/MiniPetAgents-*/Build/Products/Debug/'Mini Pet Agents.app' | head -1)/Contents/MacOS/Mini Pet Agents" --self-test-agents
 ```
 
-Non-zero exit means at least one provider would fail inside the app. Fix before
-tagging.
+The first checks the CLIs accept our arguments. The second drives a real turn
+through the app's own session classes — argv, streaming, output parsing, turn
+completion — which is the only way to catch a provider that accepts every flag
+and then sends back something we no longer understand.
+
+Non-zero exit from either means a provider would fail inside the app. Fix before
+tagging. A provider you are merely signed out of reports `auth` and does not
+fail the run.
 
 ## 1. Version
 

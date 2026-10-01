@@ -137,6 +137,7 @@ class CodexSession: AgentSession {
                 DispatchQueue.main.async {
                     // A sign-in problem is not a crash — swap the raw stderr
                     // dump for something the user can act on.
+                    guard let text = meaningfulStderr(text) else { return }
                     if looksLikeAuthFailure(text) {
                         self?.onError?(AgentProvider.codex.notSignedInMessage)
                     } else {

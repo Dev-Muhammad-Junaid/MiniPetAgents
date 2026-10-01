@@ -96,6 +96,7 @@ class ClaudeSession: AgentSession {
             guard !data.isEmpty else { return }
             if let text = String(data: data, encoding: .utf8) {
                 DispatchQueue.main.async {
+                    guard let text = meaningfulStderr(text) else { return }
                     if looksLikeAuthFailure(text) {
                         self?.onError?(AgentProvider.claude.notSignedInMessage)
                     } else {

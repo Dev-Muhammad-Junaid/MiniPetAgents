@@ -139,6 +139,7 @@ class CursorSession: AgentSession {
             let data = handle.availableData
             guard !data.isEmpty, let text = String(data: data, encoding: .utf8) else { return }
             DispatchQueue.main.async {
+                guard let text = meaningfulStderr(text) else { return }
                 if looksLikeAuthFailure(text) {
                     self?.onError?(AgentProvider.cursor.notSignedInMessage)
                 } else {

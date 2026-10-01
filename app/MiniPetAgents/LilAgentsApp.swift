@@ -19,6 +19,24 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                                                          userDriverDelegate: nil)
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Headless provider self-test. Runs the real session classes — argv,
+        // streaming, output parsing, turn completion — and exits. No menubar,
+        // no pets, no windows. See AgentSelfTest.
+        if CommandLine.arguments.contains("--self-test-agents") {
+            NSApp.setActivationPolicy(.prohibited)
+            let args = CommandLine.arguments
+            var only: [String]?
+            if let i = args.firstIndex(of: "--only"), i + 1 < args.count {
+                only = args[i + 1].split(separator: ",").map(String.init)
+            }
+            var timeout: TimeInterval = 180
+            if let i = args.firstIndex(of: "--timeout"), i + 1 < args.count,
+               let parsed = TimeInterval(args[i + 1]) {
+                timeout = parsed
+            }
+            AgentSelfTest.run(only: only, timeout: timeout)
+        }
+
         NSApp.setActivationPolicy(.accessory)
         PetLibrary.clearLegacyPinnedOrigins()
         controller = PetAgentsController()

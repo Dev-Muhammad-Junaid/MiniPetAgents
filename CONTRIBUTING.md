@@ -39,6 +39,18 @@ It reads the flags straight out of the Swift source, so adding a flag without
 updating the test's expectations fails the drift guard rather than silently
 going uncovered.
 
+That script only proves the CLIs accept our arguments. To prove we still
+understand their replies, run the app's own self-test — it drives a real turn
+through `ClaudeSession` and friends and exits with a status:
+
+```bash
+"…/Mini Pet Agents.app/Contents/MacOS/Mini Pet Agents" --self-test-agents [--only codex]
+```
+
+This is the test that caught Codex's "Reading additional input from stdin..."
+being treated as a fatal error: every flag was accepted, every argument valid,
+and every turn still showed the user a failure.
+
 Then run the app and drive the specific thing you touched. Movement and
 animation work is easy to get subtly wrong in ways a build can't catch — a pet that
 freezes for a beat between walk legs, or blinks out at the end of an animation

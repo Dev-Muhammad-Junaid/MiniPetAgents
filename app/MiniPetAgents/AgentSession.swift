@@ -119,6 +119,18 @@ enum AgentProvider: String, CaseIterable {
         }
     }
 
+    /// Executable names this provider will try, in order. Gemini falls back
+    /// to the legacy `gemini` binary when Antigravity's `agy` isn't present.
+    var binaryCandidates: [String] {
+        switch self {
+        case .claude:  return ["claude"]
+        case .codex:   return ["codex"]
+        case .copilot: return ["copilot"]
+        case .cursor:  return ["cursor-agent"]
+        case .gemini:  return ["agy", "gemini"]
+        }
+    }
+
     /// What to tell the user when this CLI reports they aren't signed in.
     var signInHint: String {
         switch self {
@@ -147,6 +159,7 @@ enum AgentProvider: String, CaseIterable {
 /// detection at all. One list, checked by `scripts/check-agents.py`.
 let authFailureMarkers: [String] = [
     "not logged in",
+    "not signed in",
     "not authenticated",
     "login required",
     "authentication required",
@@ -160,6 +173,31 @@ let authFailureMarkers: [String] = [
     "invalid api key",
     "missing api key",
 ]
+
+/// stderr lines that are chatter, not failures.
+///
+/// These CLIs use stderr as a progress channel. Codex announces "Reading
+/// additional input from stdin..." on every single run; treating that as an
+/// error put the pet in the failed pose for a turn that was working perfectly.
+/// Anything not matched here is still surfaced.
+let benignStderrMarkers: [String] = [
+    "reading additional input from stdin",
+    "reading prompt from stdin",
+]
+
+/// Drop the chatter and return what's left, or nil when the whole chunk was
+/// noise and nothing should be reported to the user.
+func meaningfulStderr(_ text: String) -> String? {
+    let kept = text
+        .split(whereSeparator: \.isNewline)
+        .map { $0.trimmingCharacters(in: .whitespaces) }
+        .filter { line in
+            guard !line.isEmpty else { return false }
+            let low = line.lowercased()
+            return !benignStderrMarkers.contains { low.contains($0) }
+        }
+    return kept.isEmpty ? nil : kept.joined(separator: "\n")
+}
 
 /// True when CLI output looks like a sign-in problem rather than a real error.
 func looksLikeAuthFailure(_ text: String) -> Bool {
@@ -317,5 +355,142 @@ extension AgentSession {
             }
         }
         send(message: prefix + message)
+    }
+}
+
+// MARK: - Headless self-test
+
+/// Exercises each provider through the app's own `AgentSession` implementation
+/// — process launch, argv, streaming, output parsing, turn completion — rather
+/// than through the CLI directly.
+///
+/// `scripts/check-agents.py` proves the CLIs accept our arguments. It cannot
+/// prove we understand what they send back: a provider can rename an event or
+/// reshape its JSON and still accept every flag, leaving a pet that sits in the
+/// thinking pose forever. This closes that gap.
+///
+///     "/Applications/Mini Pet Agents.app/Contents/MacOS/Mini Pet Agents" \
+///         --self-test-agents [--only claude,codex]
+enum AgentSelfTest {
+    private static let probe = "Reply with exactly: PETOK"
+    private static let marker = "PETOK"
+
+    enum Outcome {
+        case pass(String)
+        case auth
+        case fail(String)
+        case skipped(String)
+    }
+
+    static func run(only: [String]?, timeout: TimeInterval) -> Never {
+        let providers = AgentProvider.allCases.filter {
+            only == nil || only!.contains($0.rawValue)
+        }
+        // An app bundle's stdout is fully buffered, so a batched report at the
+        // end arrives as nothing at all if anything goes sideways. Unbuffer and
+        // emit each provider the moment it resolves — this doubles as progress
+        // for a run that can take several minutes.
+        setvbuf(stdout, nil, _IONBF, 0)
+
+        var anyFailed = false
+        say("")
+        for provider in providers {
+            let outcome = exercise(provider, timeout: timeout)
+            let (mark, detail): (String, String)
+            switch outcome {
+            case .pass(let d):    (mark, detail) = ("ok  ", d)
+            case .auth:           (mark, detail) = ("auth", "not signed in — app showed the sign-in prompt")
+            case .skipped(let d): (mark, detail) = ("skip", d)
+            case .fail(let d):
+                (mark, detail) = ("FAIL", d)
+                anyFailed = true
+            }
+            say("  \(mark)  \(provider.rawValue.padding(toLength: 10, withPad: " ", startingAt: 0)) \(detail)")
+        }
+
+        say("")
+        say(anyFailed
+            ? "A provider failed inside the app's own session layer."
+            : "Every provider completed a turn through the app's session layer.")
+        fflush(stdout)
+        exit(anyFailed ? 1 : 0)
+    }
+
+    /// stdout for the report, mirrored to stderr so the result survives even if
+    /// the caller only captured one of them.
+    private static func say(_ line: String) {
+        print(line)
+        fflush(stdout)
+    }
+
+    /// Send one message and wait for the session to report the turn finished.
+    private static func exercise(_ provider: AgentProvider, timeout: TimeInterval) -> Outcome {
+        guard installedBinary(for: provider) != nil else {
+            return .skipped("\(provider.binaryCandidates.joined(separator: "/")) not installed")
+        }
+
+        let session = provider.createSession()
+        var streamed = ""
+        var failure: String?
+        var finished = false
+
+        session.onText = { streamed += $0 }
+        session.onTurnComplete = { finished = true }
+        session.onError = { message in
+            if failure == nil { failure = message }
+            finished = true
+        }
+        session.onProcessExit = { finished = true }
+
+        session.start()
+        // start() spawns a process; persistent sessions aren't writable until
+        // it's up. Give it a moment rather than racing the spawn.
+        pump(until: { session.isRunning }, deadline: Date().addingTimeInterval(15))
+        guard session.isRunning else {
+            session.terminate()
+            return .fail("session never reported running")
+        }
+
+        session.send(message: probe)
+        pump(until: { finished }, deadline: Date().addingTimeInterval(timeout))
+        session.terminate()
+
+        if let failure = failure {
+            if looksLikeAuthFailure(failure) { return .auth }
+            return .fail(oneLine(failure))
+        }
+        if !finished { return .fail("no turn-complete within \(Int(timeout))s") }
+        if streamed.contains(marker) { return .pass("turn completed, reply parsed") }
+        if streamed.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return .fail("turn completed but no text was parsed from the reply")
+        }
+        return .pass("turn completed, reply parsed (marker not echoed verbatim)")
+    }
+
+    /// Run the main loop until `condition` holds or we pass `deadline`. The
+    /// session classes dispatch their callbacks to the main queue, so the loop
+    /// has to actually turn for any of this to make progress.
+    private static func pump(until condition: () -> Bool, deadline: Date) {
+        while !condition(), Date() < deadline {
+            RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.05))
+        }
+    }
+
+    /// Synchronous PATH lookup. ShellEnvironment.findBinary is async and the
+    /// run loop isn't turning yet at this point, so resolve it directly.
+    private static func installedBinary(for provider: AgentProvider) -> String? {
+        let path = ShellEnvironment.processEnvironment()["PATH"] ?? ""
+        let dirs = path.split(separator: ":").map(String.init)
+        for name in provider.binaryCandidates {
+            for dir in dirs where FileManager.default.isExecutableFile(atPath: "\(dir)/\(name)") {
+                return "\(dir)/\(name)"
+            }
+        }
+        return nil
+    }
+
+    private static func oneLine(_ s: String) -> String {
+        let flat = s.split(whereSeparator: \.isNewline).joined(separator: " ")
+        return String(flat.prefix(110))
     }
 }
