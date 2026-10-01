@@ -16,7 +16,7 @@ final class ActivityStore {
 
     /// Something the user can do about a failure, offered inline in the feed
     /// so they don't have to go hunting for the pet that failed.
-    enum Remedy: Equatable {
+    enum Remedy: Equatable, Codable {
         case signIn(AgentProvider)
 
         var title: String {
@@ -26,8 +26,12 @@ final class ActivityStore {
         }
     }
 
-    struct Record: Identifiable, Equatable {
-        enum State: Equatable { case live, done, failed }
+    struct Record: Identifiable, Equatable, Codable {
+        /// `interrupted` is its own state rather than a flavour of `failed`.
+        /// A turn that was still running when the app quit did not fail — we
+        /// simply never found out how it ended, and saying "failed" would be a
+        /// small lie that the feed cannot justify.
+        enum State: String, Equatable, Codable { case live, done, failed, interrupted }
 
         let id: UUID
         let petSlug: String
@@ -58,9 +62,10 @@ final class ActivityStore {
                 return tool
             }
             switch state {
-            case .live:   return "Thinking"
-            case .done:   return toolCalls == 0 ? "Replied" : "\(toolCalls) tool calls"
-            case .failed: return failure ?? "Failed"
+            case .live:        return "Thinking"
+            case .done:        return toolCalls == 0 ? "Replied" : "\(toolCalls) tool calls"
+            case .failed:      return failure ?? "Failed"
+            case .interrupted: return "Interrupted — the app quit mid-turn"
             }
         }
     }
@@ -69,7 +74,27 @@ final class ActivityStore {
     private(set) var records: [Record] = []
     private static let cap = 200
 
-    private init() {}
+    private init() {
+        records = Self.settleStaleTurns(Self.loadFromDisk())
+    }
+
+    /// Anything still marked live on load belongs to a process that no longer
+    /// exists. Settle it rather than leaving a turn spinning forever in the
+    /// feed. Static and pure so it can be exercised headlessly.
+    static func settleStaleTurns(_ input: [Record]) -> [Record] {
+        var out = input
+        for i in out.indices where out[i].state == .live {
+            out[i].state = .interrupted
+            out[i].endedAt = out[i].endedAt ?? out[i].startedAt
+        }
+        return out
+    }
+
+    /// Drop turns past the retention window.
+    static func prune(_ input: [Record], now: Date = Date()) -> [Record] {
+        let cutoff = now.addingTimeInterval(-retention)
+        return input.filter { $0.startedAt >= cutoff }
+    }
 
     // MARK: Writing
 
@@ -118,6 +143,7 @@ final class ActivityStore {
     func clear() {
         records.removeAll()
         announce()
+        flush()
     }
 
     // MARK: Reading
@@ -142,7 +168,56 @@ final class ActivityStore {
     }
 
     private func announce() {
+        scheduleSave()
         NotificationCenter.default.post(name: Self.didChange, object: nil)
+    }
+
+    // MARK: Persistence
+
+    // ~/Library/Application Support/MiniPetAgents/activity.json
+    private static var fileURL: URL {
+        let base = FileManager.default.urls(for: .applicationSupportDirectory,
+                                            in: .userDomainMask)[0]
+        let dir = base.appendingPathComponent("MiniPetAgents", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir.appendingPathComponent("activity.json")
+    }
+
+    /// Turns older than this are dropped on save. "What did everyone do
+    /// yesterday" is worth keeping; what they did last month is not, and an
+    /// unbounded file would be read on every launch.
+    static let retention: TimeInterval = 14 * 24 * 60 * 60
+
+    private var saveWork: DispatchWorkItem?
+
+    /// Coalesced: a busy turn fires noteTool several times a second and each
+    /// one would otherwise rewrite the whole file.
+    private func scheduleSave() {
+        saveWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.saveToDisk() }
+        saveWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0, execute: work)
+    }
+
+    /// Write now, without waiting for the coalescing window — used on quit.
+    func flush() {
+        saveWork?.cancel()
+        saveWork = nil
+        saveToDisk()
+    }
+
+    private func saveToDisk() {
+        guard let data = try? JSONEncoder().encode(Self.prune(records)) else { return }
+        try? data.write(to: Self.fileURL, options: .atomic)
+    }
+
+    private static func loadFromDisk() -> [Record] {
+        guard let data = try? Data(contentsOf: fileURL),
+              let decoded = try? JSONDecoder().decode([Record].self, from: data)
+        else { return [] }
+        // Newest first is an invariant the whole feed relies on; don't trust
+        // the file to have preserved it.
+        return Array(decoded.sorted { $0.startedAt > $1.startedAt }.prefix(cap))
     }
 
     /// First line only, trimmed — a failure row has one line of space and a

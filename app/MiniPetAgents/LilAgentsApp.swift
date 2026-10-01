@@ -71,6 +71,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        // Write the feed now rather than losing the last second of it to the
+        // save coalescing window.
+        ActivityStore.shared.flush()
         controller?.characters.forEach { $0.session?.terminate() }
     }
 

@@ -3,7 +3,7 @@ import AppKit
 
 // MARK: - Provider
 
-enum AgentProvider: String, CaseIterable {
+enum AgentProvider: String, CaseIterable, Codable {
     case claude, codex, copilot, cursor, gemini
 
     private static let defaultsKey = "selectedProvider"
@@ -771,6 +771,47 @@ enum FeatureSelfTest {
 
         let (turns, failures) = store.totals()
         expect(turns == 4 && failures == 2, "totals count turns and failures across every pet")
+
+        // --- persistence ---
+        // A turn still running when the app quit did not fail; we never found
+        // out how it ended. It settles to `interrupted`, which is its own
+        // state precisely so the feed doesn't have to claim otherwise.
+        let stale = store.records.first { $0.state == .done }
+        var pretendLive = stale!
+        pretendLive.state = .live
+        pretendLive.endedAt = nil
+        let settled = ActivityStore.settleStaleTurns([pretendLive])
+        expect(settled.first?.state == .interrupted,
+               "a turn left live by a quit settles to interrupted, not failed")
+        expect(settled.first?.endedAt != nil, "a settled turn gets an end time")
+        expect(settled.first?.activity.contains("Interrupted") == true,
+               "an interrupted turn says so plainly")
+
+        var done = stale!
+        done.state = .done
+        expect(ActivityStore.settleStaleTurns([done]).first?.state == .done,
+               "settling leaves finished turns alone")
+
+        var old = stale!
+        old = ActivityStore.Record(id: old.id, petSlug: old.petSlug, provider: old.provider,
+                                   state: .done,
+                                   startedAt: Date().addingTimeInterval(-ActivityStore.retention - 60),
+                                   endedAt: nil, lastTool: nil, lastToolDetail: nil,
+                                   toolCalls: 0, usageNote: nil, failure: nil, remedy: nil)
+        expect(ActivityStore.prune([old]).isEmpty, "turns past the retention window are dropped")
+        expect(ActivityStore.prune([stale!]).count == 1, "recent turns are kept")
+
+        // The file has to survive a round trip or "what did everyone do
+        // yesterday" silently becomes "what did everyone do since launch".
+        if let data = try? JSONEncoder().encode(store.records),
+           let back = try? JSONDecoder().decode([ActivityStore.Record].self, from: data) {
+            expect(back.count == store.records.count, "the feed round-trips through JSON")
+            expect(back.contains { $0.remedy == .signIn(.cursor) },
+                   "a remedy survives the round trip")
+            expect(back.contains { $0.state == .failed }, "states survive the round trip")
+        } else {
+            fail("the feed failed to encode or decode")
+        }
 
         store.clear()
         expect(store.records.isEmpty, "clearing empties the feed")
