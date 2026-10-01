@@ -167,7 +167,13 @@ class GeminiSession: AgentSession {
             let data = handle.availableData
             guard !data.isEmpty, let text = String(data: data, encoding: .utf8) else { return }
             DispatchQueue.main.async {
-                self?.onError?(text)
+                // A sign-in problem is not a crash — swap the raw stderr dump
+                // for something the user can act on. See authFailureMarkers.
+                if looksLikeAuthFailure(text) {
+                    self?.onError?(AgentProvider.gemini.notSignedInMessage)
+                } else {
+                    self?.onError?(text)
+                }
             }
         }
 

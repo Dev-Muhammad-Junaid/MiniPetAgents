@@ -135,7 +135,13 @@ class CodexSession: AgentSession {
             guard !data.isEmpty else { return }
             if let text = String(data: data, encoding: .utf8) {
                 DispatchQueue.main.async {
-                    self?.onError?(text)
+                    // A sign-in problem is not a crash — swap the raw stderr
+                    // dump for something the user can act on.
+                    if looksLikeAuthFailure(text) {
+                        self?.onError?(AgentProvider.codex.notSignedInMessage)
+                    } else {
+                        self?.onError?(text)
+                    }
                 }
             }
         }

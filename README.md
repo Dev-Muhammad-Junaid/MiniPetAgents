@@ -79,6 +79,12 @@ because a flag can be valid on one subcommand and rejected on another — `codex
 exec` accepts `--sandbox` while `codex exec resume` does not, which broke every
 follow-up message while first messages kept working.
 
+A provider you're simply signed out of reports `auth` rather than failing the
+run. That check goes further than it looks: it also confirms the app would
+*recognise* that CLI's sign-in error and show a sign-in hint instead of a raw
+stderr dump. If a CLI rewords its auth message, the run fails and names the
+wording to add to `authFailureMarkers`.
+
 Gemini is implemented (`GeminiSession.swift`, targeting the Antigravity `agy`
 binary) but hidden from the UI: `agy` is an autonomous coding agent with no
 chat-only mode, so it goes exploring the filesystem instead of answering like a

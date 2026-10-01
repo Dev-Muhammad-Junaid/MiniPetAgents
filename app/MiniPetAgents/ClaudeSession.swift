@@ -96,10 +96,8 @@ class ClaudeSession: AgentSession {
             guard !data.isEmpty else { return }
             if let text = String(data: data, encoding: .utf8) {
                 DispatchQueue.main.async {
-                    let lower = text.lowercased()
-                    if lower.contains("not logged in") || lower.contains("please run /login") || lower.contains("unauthenticated") {
-                        let msg = "Not logged in to Claude.\n\nOpen Terminal and run:\n  claude\n\nComplete the login prompt, then come back and chat here."
-                        self?.onError?(msg)
+                    if looksLikeAuthFailure(text) {
+                        self?.onError?(AgentProvider.claude.notSignedInMessage)
                     } else {
                         self?.onError?(text)
                     }
@@ -283,9 +281,8 @@ class ClaudeSession: AgentSession {
         case "result":
             isBusy = false
             if let result = json["result"] as? String, !result.isEmpty {
-                let lower = result.lowercased()
-                if lower.contains("not logged in") || lower.contains("please run /login") || lower.contains("unauthenticated") {
-                    let msg = "Not logged in to Claude.\n\nOpen Terminal and run:\n  claude\n\nComplete the login prompt, then come back and chat here."
+                if looksLikeAuthFailure(result) {
+                    let msg = AgentProvider.claude.notSignedInMessage
                     history.append(AgentMessage(role: .error, text: msg))
                     onError?(msg)
                 } else {

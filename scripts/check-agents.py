@@ -103,6 +103,30 @@ def run(cmd, stdin="", timeout=90):
         return 127, "<not found>"
 
 
+# Wording that means "you are not signed in", independent of what the app
+# happens to look for. Kept deliberately broader than the app's own list so a
+# CLI that reworded its auth error is reported as a gap in the app, not as a
+# mystery failure.
+GENERIC_AUTH = [
+    "not logged in", "not authenticated", "login required",
+    "authentication required", "unauthenticated", "unauthorized",
+    "please log in", "please sign in", "run 'agent login'", "run `agent login`",
+    "api key", "credentials",
+]
+
+
+def app_auth_markers():
+    """The substrings AgentSession.swift actually matches on."""
+    text = (SRC / "AgentSession.swift").read_text()
+    m = re.search(r"let authFailureMarkers: \[String\] = \[(.*?)\]", text, re.S)
+    return re.findall(r'"([^"]+)"', m.group(1)) if m else []
+
+
+def looks_like_auth(text):
+    low = text.lower()
+    return any(k in low for k in GENERIC_AUTH)
+
+
 def declared_flags(source_file):
     """Flags actually present in the session's Swift source."""
     text = (SRC / source_file).read_text()
@@ -155,6 +179,16 @@ def check_live(name, spec):
         return (name, "live", "FAIL", "CLI tried to render an interactive TUI")
     if "unexpected argument" in out or "unknown option" in out.lower():
         return (name, "live", "FAIL", out.strip().splitlines()[0][:100])
+    if looks_like_auth(out) and "OK" not in out:
+        # Being signed out is the operator's problem, not a code regression —
+        # but the app still has to *recognise* it, or the pet shows a raw
+        # stderr dump instead of a sign-in hint.
+        low = out.lower()
+        if any(m in low for m in app_auth_markers()):
+            return (name, "live", "AUTH", "not signed in — the app will prompt correctly")
+        return (name, "live", "FAIL",
+                "auth error the app does NOT recognise — add wording to "
+                f"authFailureMarkers: {out.strip().splitlines()[0][:70]}")
     if "OK" in out:
         return (name, "live", "PASS", "round trip returned a reply")
     return (name, "live", "FAIL", f"rc={rc}, no reply found: {out.strip()[:100]}")
@@ -181,7 +215,7 @@ def main():
     print()
     for provider, check, status, detail in rows:
         label = f"{provider} / {check}"
-        mark = {"PASS": "ok  ", "FAIL": "FAIL", "SKIP": "skip"}[status]
+        mark = {"PASS": "ok  ", "FAIL": "FAIL", "SKIP": "skip", "AUTH": "auth"}[status]
         print(f"  {mark}  {label:<{width}} {detail}")
         if status == "FAIL" and not PROVIDERS[provider].get("optional"):
             failed = True
@@ -190,6 +224,10 @@ def main():
     if failed:
         print("Some providers would fail inside the app. Fix before shipping.")
         return 1
+    if any(r[2] == "AUTH" for r in rows):
+        print("All providers accept the arguments the app passes.")
+        print("Some are signed out — sign in to exercise them end to end.")
+        return 0
     print("All installed providers accept the arguments the app passes.")
     return 0
 
