@@ -40,6 +40,9 @@ final class NotchShelfView: NSView {
 
     var onHoverChanged: ((Bool) -> Void)?
     var onModeChanged: ((Mode) -> Void)?
+    /// A click anywhere that isn't a control — this is what opens the panel.
+    var onActivate: (() -> Void)?
+    private var stage: NotchCommandCentre.Stage = .collapsed
     private(set) var mode: Mode = .pets
     private(set) var rows: [ActivityRow] = []
     private(set) var summary: String = ""
@@ -86,6 +89,10 @@ final class NotchShelfView: NSView {
     }
 
     override func mouseDown(with event: NSEvent) {
+        guard stage == .expanded else {
+            onActivate?()
+            return
+        }
         let point = convert(event.locationInWindow, from: nil)
         if let hit = railHits.first(where: { $0.1.contains(point) }) {
             setMode(hit.0)
@@ -99,8 +106,9 @@ final class NotchShelfView: NSView {
         }
     }
 
-    func setExpanded(_ value: Bool, size: NSSize) {
-        expanded = value
+    func setStage(_ value: NotchCommandCentre.Stage, size: NSSize) {
+        stage = value
+        expanded = value == .expanded
         setFrameSize(size)
         needsDisplay = true
     }
@@ -128,8 +136,12 @@ final class NotchShelfView: NSView {
         ctx.setFillColor(NSColor.black.cgColor)
         ctx.fillPath()
 
+        switch stage {
+        case .collapsed: return drawCollapsed()
+        case .peek:      return drawResting(ctx)
+        case .expanded:  break
+        }
         guard !entries.isEmpty || !rows.isEmpty else { return }
-        guard expanded else { return drawResting(ctx) }
         drawRail()
         switch mode {
         case .pets:     drawExpanded(ctx)
@@ -182,6 +194,21 @@ final class NotchShelfView: NSView {
     }
 
     // MARK: states
+
+    /// The whole UI when nobody is using it: one dot in the active pet's
+    /// status colour.
+    ///
+    /// It sits off-centre deliberately. On a notched Mac the cut-out is not a
+    /// display area, so anything drawn dead centre is simply not rendered —
+    /// the dot has to land on the visible strip beside it.
+    private func drawCollapsed() {
+        guard let entry = entries.indices.contains(activeIndex) ? entries[activeIndex] : entries.first
+        else { return }
+        let d: CGFloat = entry.isBusy ? 8 : 6
+        let rect = NSRect(x: bounds.minX + 14, y: bounds.midY - d / 2, width: d, height: d)
+        entry.tint.withAlphaComponent(entry.isBusy ? 1.0 : 0.75).setFill()
+        NSBezierPath(ovalIn: rect).fill()
+    }
 
     private func drawResting(_ ctx: CGGraphicsContextAlias) {
         guard !entries.isEmpty else { return }

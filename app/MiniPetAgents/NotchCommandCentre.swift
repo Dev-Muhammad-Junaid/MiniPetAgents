@@ -26,6 +26,9 @@ final class NotchCommandCentre {
     /// resting costs the user nothing; elsewhere it falls back to a narrow
     /// strip that reads as a deliberate tab rather than a bar across the menu.
     private static let restingFallbackWidth: CGFloat = 168
+    /// How much wider than the cut-out the peek runs — enough for the active
+    /// pet and the roster dots to sit on the visible strips either side.
+    private static let peekPadding: CGFloat = 210
     private static let restingHeight: CGFloat = 36
     private static let expandedWidth: CGFloat = 620
     /// Activity needs room for several rows; Pets does not. Height follows the
@@ -39,7 +42,17 @@ final class NotchCommandCentre {
     private static let hoverIntent: TimeInterval = 0.12
     private static let cornerRadius: CGFloat = 26
 
-    private(set) var isExpanded = false
+    /// Three stages, escalating with intent.
+    ///
+    /// `collapsed` is the whole UI when you are not using it: notch width, a
+    /// single dot in the active pet's status colour. It costs no menu-bar
+    /// space and still tells you at a glance whether anything is working.
+    /// `peek` widens the shelf on hover to show who. `expanded` is a click,
+    /// because opening a panel over someone's menu bar should be deliberate.
+    enum Stage { case collapsed, peek, expanded }
+
+    private(set) var stage: Stage = .collapsed
+    var isExpanded: Bool { stage == .expanded }
     private weak var controller: PetAgentsController?
     private var window: NSWindow?
     private var hostView: NotchShelfView?
@@ -76,14 +89,22 @@ final class NotchCommandCentre {
         return notch > 0 ? notch : restingFallbackWidth
     }
 
-    private func frame(on screen: NSScreen, expanded: Bool) -> NSRect {
-        let w = expanded ? Self.expandedWidth : Self.restingWidth(on: screen)
-        // Resting, the shelf is exactly as tall as the notch so it disappears
-        // into it; expanded it drops below the menu bar.
+    private func frame(on screen: NSScreen, stage: Stage) -> NSRect {
         let notchH = Self.notchHeight(for: screen)
-        let h = expanded
-            ? Self.expandedHeight(for: hostView?.mode ?? .pets)
-            : max(Self.restingHeight, notchH)
+        let base = Self.restingWidth(on: screen)
+        let w: CGFloat
+        let h: CGFloat
+        switch stage {
+        case .collapsed:
+            w = base
+            h = max(Self.restingHeight, notchH)
+        case .peek:
+            w = base + Self.peekPadding
+            h = max(Self.restingHeight, notchH)
+        case .expanded:
+            w = Self.expandedWidth
+            h = Self.expandedHeight(for: hostView?.mode ?? .pets)
+        }
         // Pinned to the very top of the full frame, not visibleFrame: the
         // shelf must run under the menu bar to meet the notch.
         return NSRect(x: screen.frame.midX - w / 2,
@@ -96,7 +117,7 @@ final class NotchCommandCentre {
     func show(on screen: NSScreen) {
         if window == nil { build(on: screen) }
         guard let window = window else { return }
-        window.setFrame(frame(on: screen, expanded: isExpanded), display: true)
+        window.setFrame(frame(on: screen, stage: stage), display: true)
         window.orderFrontRegardless()
         refresh()
     }
@@ -106,7 +127,7 @@ final class NotchCommandCentre {
     }
 
     private func build(on screen: NSScreen) {
-        let win = NSWindow(contentRect: frame(on: screen, expanded: false),
+        let win = NSWindow(contentRect: frame(on: screen, stage: .collapsed),
                            styleMask: .borderless, backing: .buffered, defer: false)
         win.isOpaque = false
         win.backgroundColor = .clear
@@ -120,6 +141,11 @@ final class NotchCommandCentre {
         let view = NotchShelfView(frame: NSRect(origin: .zero, size: win.frame.size))
         view.onHoverChanged = { [weak self] inside in self?.hoverChanged(inside) }
         view.onModeChanged = { [weak self] _ in self?.resizeForMode() }
+        // A click is what opens the panel. Hover only ever peeks.
+        view.onActivate = { [weak self] in
+            guard let self = self else { return }
+            if self.stage != .expanded { self.setStage(.expanded) }
+        }
         win.contentView = view
 
         window = win
@@ -131,32 +157,37 @@ final class NotchCommandCentre {
     private func hoverChanged(_ inside: Bool) {
         hoverTimer?.invalidate()
         if inside {
+            // Only peek on hover, and only after the pointer has settled —
+            // without the delay the shelf twitches every time someone crosses
+            // the top of the screen on the way to a menu.
+            guard stage == .collapsed else { return }
             hoverTimer = Timer.scheduledTimer(withTimeInterval: Self.hoverIntent, repeats: false) { [weak self] _ in
-                self?.setExpanded(true)
+                self?.setStage(.peek)
             }
         } else {
-            setExpanded(false)
+            setStage(.collapsed)
         }
     }
 
-    func setExpanded(_ expanded: Bool) {
-        guard expanded != isExpanded, let window = window,
+    func setStage(_ newStage: Stage) {
+        guard newStage != stage, let window = window,
               let screen = window.screen ?? NSScreen.main else { return }
-        isExpanded = expanded
-        let target = frame(on: screen, expanded: expanded)
+        let growing = newStage != .collapsed && stage == .collapsed || newStage == .expanded
+        stage = newStage
+        let target = frame(on: screen, stage: newStage)
 
         // Spring, not a duration curve. Opening overshoots slightly so the
         // shelf reads as one piece of material stretching; closing does not,
         // because a shelf that bounces shut looks like a bug.
         NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = expanded ? 0.34 : 0.22
-            ctx.timingFunction = expanded
+            ctx.duration = growing ? 0.30 : 0.20
+            ctx.timingFunction = growing
                 ? CAMediaTimingFunction(controlPoints: 0.22, 1.2, 0.3, 1)
                 : CAMediaTimingFunction(name: .easeIn)
             ctx.allowsImplicitAnimation = true
             window.animator().setFrame(target, display: true)
         }
-        hostView?.setExpanded(expanded, size: target.size)
+        hostView?.setStage(newStage, size: target.size)
         refresh()
     }
 
@@ -165,14 +196,14 @@ final class NotchCommandCentre {
     private func resizeForMode() {
         guard isExpanded, let window = window,
               let screen = window.screen ?? NSScreen.main else { return }
-        let target = frame(on: screen, expanded: true)
+        let target = frame(on: screen, stage: .expanded)
         NSAnimationContext.runAnimationGroup { ctx in
             ctx.duration = 0.2
             ctx.timingFunction = CAMediaTimingFunction(controlPoints: 0.22, 1.1, 0.3, 1)
             ctx.allowsImplicitAnimation = true
             window.animator().setFrame(target, display: true)
         }
-        hostView?.setExpanded(true, size: target.size)
+        hostView?.setStage(.expanded, size: target.size)
         refresh()
     }
 
