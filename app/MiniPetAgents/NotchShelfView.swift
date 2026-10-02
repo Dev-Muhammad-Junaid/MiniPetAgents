@@ -32,6 +32,11 @@ final class NotchShelfView: NSView {
 
     struct Entry {
         let slug: String
+        /// Which CLI is behind this pet. Drawn as a small monochrome mark at
+        /// the pet's shoulder rather than a full-colour badge: five brand
+        /// logos at full saturation fight each other and the status colours,
+        /// and the pet stops being the thing you are looking at.
+        var provider: AgentProvider?
         /// The pet's full animation for whatever it is doing, not one frozen
         /// frame. A still sprite in the notch is the single biggest reason the
         /// shelf read as dead.
@@ -528,19 +533,26 @@ final class NotchShelfView: NSView {
         let dot: CGFloat = 7
         let others = entries.enumerated().filter { $0.offset != activeIndex }.map { $0.element }
 
-        // Split around the hardware. The active pet takes the strip left of
-        // the cut-out and the status dots the strip to its right; centring
-        // them put everything behind the notch, where nothing renders.
-        let gap: CGFloat = 10
-        let leftEdge = cutout.map { $0.minX } ?? b.midX - size / 2
-        let rightEdge = cutout.map { $0.maxX } ?? b.midX + size / 2 + gap
+        // Space-between across our own shelf, not hugging the hardware: the
+        // pet sits at the far left of the overlay and the dots at the far
+        // right, with the cut-out falling in the gap between them. Tucking
+        // them against the notch edges left everything bunched in the middle.
+        let inset: CGFloat = 12
+        let dotsWidth = CGFloat(min(others.count, 3)) * (dot + 5) - 5
 
-        let petX = min(max(b.minX + 6, leftEdge - gap - size), b.maxX - size - 6)
+        var petX = b.minX + inset
+        var dotsX = b.maxX - inset - dotsWidth
+        // Guarantee neither lands in the cut-out, however narrow the shelf is.
+        if let cut = cutout {
+            petX = min(petX, cut.minX - size - 6)
+            dotsX = max(dotsX, cut.maxX + 6)
+        }
+
         draw(entries[activeIndex],
              in: NSRect(x: petX, y: b.midY - size / 2, width: size, height: size),
              lit: true, ctx: ctx)
 
-        var x = rightEdge + gap
+        var x = dotsX
         for entry in others.prefix(3) where x + dot <= b.maxX - 6 {
             let pulse = entry.isBusy ? 0.55 + 0.45 * CGFloat(0.5 + 0.5 * sin(clock * 2.4)) : 0.55
             entry.tint.withAlphaComponent(pulse).setFill()
@@ -664,6 +676,39 @@ final class NotchShelfView: NSView {
         settle(to: target)
     }
 
+    /// The provider mark at the pet's shoulder: a small disc in that CLI's
+    /// brand colour carrying its initial.
+    ///
+    /// The bundled logo assets have opaque backgrounds, so tinting one into a
+    /// silhouette just produces a solid block, and dropping a full-colour logo
+    /// in at 13pt is mush. Colour plus a letter is legible at this size, stays
+    /// one weight across all five, and reuses the brand colours the app
+    /// already defines — the provider is spelled out in Chat and Activity, so
+    /// the disc only has to distinguish, not explain.
+    private func drawSigil(_ entry: Entry, on rect: NSRect, alpha: CGFloat) {
+        guard let provider = entry.provider, alpha > 0.02 else { return }
+        let d = max(15, rect.width * 0.33)
+        let disc = NSRect(x: rect.maxX - d * 0.72, y: rect.minY - d * 0.06,
+                          width: d, height: d)
+
+        // A dark collar so the disc separates from the sprite behind it.
+        NSColor.black.withAlphaComponent(0.95 * alpha).setFill()
+        NSBezierPath(ovalIn: disc.insetBy(dx: -1.5, dy: -1.5)).fill()
+        provider.brandColor.withAlphaComponent(alpha).setFill()
+        NSBezierPath(ovalIn: disc).fill()
+
+        let initial = String(provider.displayName.prefix(1))
+        let style = NSMutableParagraphStyle()
+        style.alignment = .center
+        let size = d * 0.58
+        NSAttributedString(string: initial, attributes: [
+            .font: NSFont.systemFont(ofSize: size, weight: .bold),
+            .foregroundColor: NSColor.white.withAlphaComponent(alpha),
+            .paragraphStyle: style,
+        ]).draw(in: NSRect(x: disc.minX, y: disc.midY - size * 0.62,
+                           width: disc.width, height: size * 1.3))
+    }
+
     /// Largest rect of `size`'s aspect ratio that fits inside `bounds`.
     static func aspectFit(_ size: NSSize, in bounds: NSRect) -> NSRect {
         guard size.width > 0, size.height > 0 else { return bounds }
@@ -710,6 +755,13 @@ final class NotchShelfView: NSView {
             }
             draw(entries[slot.index], in: lifted, lit: slot.distance < 0.5,
                  alpha: base * t * bodyAlpha, ctx: ctx)
+            // Only the front pet carries its mark. On the others it would be
+            // five badges competing at 10pt, which is the logo soup the design
+            // deliberately avoids.
+            if slot.distance < 0.6 {
+                drawSigil(entries[slot.index], on: lifted,
+                          alpha: (1 - slot.distance / 0.6) * t * bodyAlpha)
+            }
         }
 
         guard entries.indices.contains(activeIndex) else { return }

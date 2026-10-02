@@ -328,6 +328,7 @@ final class NotchCommandCentre {
             let frames = pack.frames[pet.spriteState] ?? pack.frames[.idle] ?? []
             guard !frames.isEmpty else { return nil }
             return NotchShelfView.Entry(slug: pet.petSlug,
+                                        provider: pet.resolvedProvider,
                                         frames: frames,
                                         fps: pack.metadata.animations[pet.spriteState]?.fps ?? 8,
                                         tint: Self.statusColour(for: pet.spriteState),

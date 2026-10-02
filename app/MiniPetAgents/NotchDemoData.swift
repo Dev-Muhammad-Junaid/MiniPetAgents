@@ -33,20 +33,21 @@ enum NotchDemoData {
     /// state, so the shelf shows the whole animation vocabulary at once rather
     /// than five copies of the same idle pose.
     static func entries() -> [NotchShelfView.Entry] {
-        let script: [(PetState, NSColor, Bool)] = [
-            (.running,  calm,   true),    // the active one, hard at work
-            (.runRight, good,   true),
-            (.waving,   wait,   false),
-            (.review,   review, false),
-            (.failed,   bad,    false),
+        let script: [(PetState, NSColor, Bool, AgentProvider)] = [
+            (.running,  calm,   true,  .claude),   // the active one, hard at work
+            (.runRight, good,   true,  .codex),
+            (.waving,   wait,   false, .cursor),
+            (.review,   review, false, .copilot),
+            (.failed,   bad,    false, .claude),
         ]
         var out: [NotchShelfView.Entry] = []
         for (i, pet) in PetLibrary.shared.pets.prefix(5).enumerated() {
             guard let pack = pet.loadPack() else { continue }
-            let (state, tint, busy) = script[i % script.count]
+            let (state, tint, busy, provider) = script[i % script.count]
             let frames = pack.frames[state] ?? pack.frames[.idle] ?? []
             guard !frames.isEmpty else { continue }
             out.append(NotchShelfView.Entry(slug: pet.slug,
+                                            provider: provider,
                                             frames: frames,
                                             fps: pack.metadata.animations[state]?.fps ?? 8,
                                             tint: tint,
