@@ -618,7 +618,11 @@ enum FeatureSelfTest {
             PetLibrary.setPreferredPlacement(mode, for: slug)
             expect(PetLibrary.preferredPlacement(for: slug) == mode,
                    "placement \(mode.rawValue) should round-trip")
+            expect(!mode.displayName.isEmpty && !mode.symbolName.isEmpty,
+                   "placement \(mode.rawValue) has a name and an icon for the pickers")
         }
+        expect(PlacementMode.allCases.contains(.notch),
+               "a pet can be placed in the notch instead of on the desktop")
         PetLibrary.setPreferredModel("some-model", for: slug)
         expect(PetLibrary.preferredModel(for: slug) == "some-model", "model should round-trip")
         PetLibrary.setPreferredModel(nil, for: slug)

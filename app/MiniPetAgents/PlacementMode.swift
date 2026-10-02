@@ -10,6 +10,10 @@ enum PlacementMode: String, CaseIterable {
     case freeRoam
     case leftStack
     case rightStack
+    /// Lives in the notch shelf only. The pet has no window on the desktop —
+    /// showing the same pet roaming the screen *and* sitting in the shelf is
+    /// the same animal twice, which reads as a bug rather than two views.
+    case notch
 
     var displayName: String {
         switch self {
@@ -17,6 +21,7 @@ enum PlacementMode: String, CaseIterable {
         case .freeRoam:   return "Free Roam"
         case .leftStack:  return "Left Stack"
         case .rightStack: return "Right Stack"
+        case .notch:      return "In the Notch"
         }
     }
 
@@ -27,6 +32,7 @@ enum PlacementMode: String, CaseIterable {
         case .freeRoam:   return "arrow.up.left.and.arrow.down.right"
         case .leftStack:  return "sidebar.left"
         case .rightStack: return "sidebar.right"
+        case .notch:      return "menubar.rectangle"
         }
     }
 }
@@ -62,7 +68,22 @@ enum PlacementStrategies {
         case .freeRoam:   return FreeRoamPlacement()
         case .leftStack:  return StackPlacement(edge: .left)
         case .rightStack: return StackPlacement(edge: .right)
+        case .notch:      return NotchPlacement()
         }
+    }
+}
+
+// MARK: - Notch
+
+/// A pet that lives in the shelf has no presence on the desktop at all: its
+/// window is ordered out and no motion runs for it. Everything the user sees
+/// of it is drawn by the notch.
+struct NotchPlacement: PlacementStrategy {
+    func update(_ pet: WalkerCharacter, context ctx: PlacementContext) {
+        pet.isWalking = false
+        pet.isPaused = true
+        if pet.window?.isVisible == true { pet.window.orderOut(nil) }
+        pet.hideBubble()
     }
 }
 

@@ -68,6 +68,7 @@ final class PetAgentsController {
         char.positionProgress = CGFloat.random(in: 0.15...0.85)
         char.pauseEndTime = CACurrentMediaTime() + Double.random(in: 0.5...3.5)
         char.setup()
+        if char.placement == .notch { char.window?.orderOut(nil) }
         characters.append(char)
         planners[char.petSlug] = BehaviorPlanner(pet: char)
     }
@@ -92,6 +93,14 @@ final class PetAgentsController {
         char.placement = pet.placement
         char.providerOverride = pet.providerOverride
         char.applyDisplaySizeFromLibrary()
+        // The per-tick loop only visits pets whose window is visible, so a pet
+        // coming back out of the notch has to be re-shown here — its strategy
+        // will never run again on its own.
+        if pet.placement == .notch {
+            char.window?.orderOut(nil)
+        } else if char.window?.isVisible == false {
+            char.window?.orderFrontRegardless()
+        }
     }
 
     /// Re-apply size after prefs change.

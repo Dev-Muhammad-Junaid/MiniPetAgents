@@ -1452,7 +1452,7 @@ class WalkerCharacter {
         }
     }
 
-    private func hideBubble() {
+    func hideBubble() {
         if thinkingBubbleWindow?.isVisible ?? false { thinkingBubbleWindow?.orderOut(nil) }
     }
 
