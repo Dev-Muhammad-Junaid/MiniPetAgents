@@ -112,6 +112,16 @@ final class NotchShelfView: NSView {
     /// the whole shelf — the pets are already decoded, so this is just a
     /// redraw at the pack's own frame rate.
     private var heartbeat: Timer?
+    /// 0→1 across a mode change. Below 0.5 the outgoing body is still drawn,
+    /// fading; above it the incoming one fades in. A cut between two dark
+    /// panels reads as a glitch, so they cross rather than swap.
+    private var modeFade: CGFloat = 1
+    private var modeFadeTimer: Timer?
+    private var outgoingMode: Mode?
+    /// Alpha for whichever body is being drawn right now.
+    private var bodyAlpha: CGFloat {
+        modeFade >= 1 ? 1 : (modeFade < 0.5 ? 1 - modeFade * 2 : (modeFade - 0.5) * 2)
+    }
     private var clock: CFTimeInterval { CACurrentMediaTime() }
     private(set) var entries: [Entry] = []
     private(set) var activeIndex = 0
@@ -190,10 +200,30 @@ final class NotchShelfView: NSView {
 
     func setMode(_ newMode: Mode) {
         guard newMode != mode else { return }
+        outgoingMode = mode
         mode = newMode
-        restartAppear()
-        needsDisplay = true
+        startModeFade()
         onModeChanged?(newMode)
+    }
+
+    private func startModeFade() {
+        modeFadeTimer?.invalidate()
+        modeFade = 0
+        let start = CACurrentMediaTime()
+        modeFadeTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60.0, repeats: true) { [weak self] t in
+            guard let self = self else { return t.invalidate() }
+            let p = min(1, CGFloat((CACurrentMediaTime() - start) / 0.26))
+            self.modeFade = p
+            // The incoming body replays its stagger as it arrives, so the new
+            // mode deals itself out rather than simply appearing at full.
+            if p >= 0.5, self.outgoingMode != nil {
+                self.outgoingMode = nil
+                self.restartAppear()
+            }
+            if p >= 1 { t.invalidate() }
+            self.needsDisplay = true
+        }
+        if let modeFadeTimer { RunLoop.main.add(modeFadeTimer, forMode: .common) }
     }
 
     override func mouseDown(with event: NSEvent) {
@@ -210,8 +240,10 @@ final class NotchShelfView: NSView {
         }
         // Clicking a pet in the character select makes it active.
         guard mode == .pets, !entries.isEmpty else { return }
-        if let i = slotFrames().firstIndex(where: { $0.contains(point) }) {
-            activeIndex = i
+        if let hit = slots().first(where: { $0.rect.insetBy(dx: -4, dy: -4).contains(point) }),
+           hit.index != activeIndex {
+            activeIndex = hit.index
+            restartAppear()
             needsDisplay = true
         }
     }
@@ -288,7 +320,7 @@ final class NotchShelfView: NSView {
         }
         guard !entries.isEmpty || !rows.isEmpty else { return }
         drawRail()
-        switch mode {
+        switch outgoingMode ?? mode {
         case .pets:     drawExpanded(ctx)
         case .activity: drawActivity()
         }
@@ -323,7 +355,7 @@ final class NotchShelfView: NSView {
     /// Soft bloom behind a pet — the only light source in the composition.
     private func glow(_ centre: NSPoint, radius: CGFloat, colour: NSColor, alpha: CGFloat) {
         guard alpha > 0.01, let ctx = NSGraphicsContext.current?.cgContext else { return }
-        let colours = [colour.withAlphaComponent(0.30 * alpha).cgColor,
+        let colours = [colour.withAlphaComponent(0.22 * alpha).cgColor,
                        colour.withAlphaComponent(0).cgColor] as CFArray
         guard let g = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(),
                                  colors: colours, locations: [0, 1]) else { return }
@@ -348,11 +380,20 @@ final class NotchShelfView: NSView {
             NSBezierPath(roundedRect: track, xRadius: track.height / 2,
                          yRadius: track.height / 2).fill()
         }
+        // The active pill slides between segments rather than cutting, so the
+        // selection reads as one object moving.
+        if let to = frames.first(where: { $0.0 == mode })?.1 {
+            let from = outgoingMode.flatMap { o in frames.first(where: { $0.0 == o })?.1 } ?? to
+            let p = min(1, modeFade / 0.5)
+            let eased = 1 - pow(1 - p, 3)
+            let pill = NSRect(x: from.minX + (to.minX - from.minX) * eased,
+                              y: to.minY,
+                              width: from.width + (to.width - from.width) * eased,
+                              height: to.height)
+            NSColor(white: 0.16, alpha: 1).setFill()
+            NSBezierPath(roundedRect: pill, xRadius: 12, yRadius: 12).fill()
+        }
         for (m, pill) in frames {
-            if m == mode {
-                NSColor(white: 0.16, alpha: 1).setFill()
-                NSBezierPath(roundedRect: pill, xRadius: 12, yRadius: 12).fill()
-            }
             text(m.title, 12, m == mode ? .semibold : .medium,
                  m == mode ? .white : NSColor(white: 0.56, alpha: 1),
                  at: NSPoint(x: pill.minX + 14, y: pill.maxY - 5))
@@ -383,8 +424,8 @@ final class NotchShelfView: NSView {
         let size = min(22, b.height - 8)
         let petRect = NSRect(x: b.minX + 11, y: b.midY - size / 2, width: size, height: size)
         if let image = entry.frame(at: clock) {
-            glow(NSPoint(x: petRect.midX, y: petRect.midY), radius: size * 1.1,
-                 colour: entry.tint, alpha: entry.isBusy ? 0.9 : 0.35)
+            glow(NSPoint(x: petRect.midX, y: petRect.midY), radius: size * 0.95,
+                 colour: entry.tint, alpha: entry.isBusy ? 0.55 : 0.22)
             image.draw(in: Self.aspectFit(image.size, in: petRect), from: .zero,
                        operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
         }
@@ -433,47 +474,56 @@ final class NotchShelfView: NSView {
     /// Frames of each carousel slot, in `entries` order. Shared by drawing and
     /// hit-testing so a click can never land on a pet other than the one drawn
     /// under the pointer.
-    private func slotFrames() -> [NSRect] {
-        var frames = [NSRect](repeating: .zero, count: entries.count)
-        guard !entries.isEmpty else { return frames }
-        let active: CGFloat = 74, neighbour: CGFloat = 46, gap: CGFloat = 20
-        // The row sits in the upper two-thirds of the card; the status
-        // pairing owns the band underneath it. Overlapping them put the word
-        // straight through the pet's face.
+    /// One visible slot: which entry, where, and how far from the front.
+    struct Slot {
+        let index: Int
+        let rect: NSRect
+        let distance: Int
+    }
+
+    /// The carousel as a ring. The active pet is always dead centre and its
+    /// neighbours fall away either side; with five or more pets the roster
+    /// wraps, so the row is balanced no matter which pet is selected. Centring
+    /// the *group* instead left the front pet visibly off-centre whenever the
+    /// selection sat at either end — a character selector has to put the
+    /// thing you are choosing in the middle.
+    private func slots() -> [Slot] {
+        let n = entries.count
+        guard n > 0 else { return [] }
+        let active: CGFloat = 74, neighbour: CGFloat = 48, far: CGFloat = 34, gap: CGFloat = 18
         let body = bodyRect()
-        let baseline = body.minY + body.height * 0.60
-        frames[activeIndex] = NSRect(x: shelfRect.midX - active / 2, y: baseline - active / 2,
-                                     width: active, height: active)
-        var x = shelfRect.midX - active / 2 - gap
-        for offset in 1...2 {
-            let i = activeIndex - offset
-            guard i >= 0 else { break }
-            let s = neighbour - CGFloat(offset - 1) * 10
-            x -= s
-            frames[i] = NSRect(x: x, y: baseline - s / 2, width: s, height: s)
-            x -= gap
+        let baseline = body.minY + Self.rowCentre(in: body)
+        let wraps = n >= 5
+
+        func size(_ d: Int) -> CGFloat { d == 0 ? active : (d == 1 ? neighbour : far) }
+        func entry(_ offset: Int) -> Int? {
+            let raw = activeIndex + offset
+            if wraps { return ((raw % n) + n) % n }
+            return (0..<n).contains(raw) ? raw : nil
         }
-        x = shelfRect.midX + active / 2 + gap
-        for offset in 1...2 {
-            let i = activeIndex + offset
-            guard i < entries.count else { break }
-            let s = neighbour - CGFloat(offset - 1) * 10
-            frames[i] = NSRect(x: x, y: baseline - s / 2, width: s, height: s)
-            x += s + gap
-        }
-        // Centre the group that actually exists. With the active pet at either
-        // end of the roster there are no neighbours on one side, and centring
-        // only the active pet leaves the row visibly lopsided.
-        let used = frames.filter { $0 != .zero }
-        if let minX = used.map({ $0.minX }).min(), let maxX = used.map({ $0.maxX }).max() {
-            let shift = shelfRect.midX - (minX + maxX) / 2
-            if abs(shift) > 0.5 {
-                for i in frames.indices where frames[i] != .zero {
-                    frames[i] = frames[i].offsetBy(dx: shift, dy: 0)
-                }
+
+        var out: [Slot] = []
+        out.append(Slot(index: activeIndex,
+                        rect: NSRect(x: body.midX - active / 2, y: baseline - active / 2,
+                                     width: active, height: active),
+                        distance: 0))
+        var left = body.midX - active / 2 - gap
+        var right = body.midX + active / 2 + gap
+        for d in 1...2 {
+            let sz = size(d)
+            if let i = entry(-d) {
+                left -= sz
+                out.append(Slot(index: i, rect: NSRect(x: left, y: baseline - sz / 2,
+                                                       width: sz, height: sz), distance: d))
+                left -= gap
+            }
+            if let i = entry(d) {
+                out.append(Slot(index: i, rect: NSRect(x: right, y: baseline - sz / 2,
+                                                       width: sz, height: sz), distance: d))
+                right += sz + gap
             }
         }
-        return frames
+        return out
     }
 
     /// Largest rect of `size`'s aspect ratio that fits inside `bounds`.
@@ -484,6 +534,16 @@ final class NotchShelfView: NSView {
         return NSRect(x: bounds.midX - w / 2, y: bounds.midY - h / 2, width: w, height: h)
     }
 
+    /// The Pets body is laid out from one ladder of offsets above the card's
+    /// bottom edge, so the row, the selection bar, the name and the status
+    /// pairing can't drift into each other — which they did when each was
+    /// derived separately and the name landed on top of the word.
+    private static func rowCentre(in body: NSRect) -> CGFloat { body.height - 84 }
+    private static let barY: CGFloat = 80
+    private static let nameY: CGFloat = 72
+    private static let wordY: CGFloat = 50
+    private static let captionY: CGFloat = 25
+
     /// The elevated card every body sits on.
     private func bodyRect() -> NSRect {
         let b = settledRect
@@ -493,36 +553,46 @@ final class NotchShelfView: NSView {
 
     private func drawExpanded(_ ctx: CGGraphicsContextAlias) {
         let body = bodyRect()
-        card(body, alpha: appear)
+        card(body, alpha: appear * bodyAlpha)
 
-        let frames = slotFrames()
-        for (i, rect) in frames.enumerated() where rect != .zero {
-            let distance = abs(i - activeIndex)
-            let t = stagger(distance)
+        for slot in slots() {
+            let t = stagger(slot.distance)
             guard t > 0.01 else { continue }
-            let base: CGFloat = distance == 0 ? 1.0 : (distance == 1 ? 0.55 : 0.36)
-            // Arrive from slightly below as well as fading, so the row
-            // assembles rather than appearing.
-            let lifted = rect.offsetBy(dx: 0, dy: (1 - t) * -10)
-            if distance == 0 {
+            let base: CGFloat = slot.distance == 0 ? 1.0 : (slot.distance == 1 ? 0.5 : 0.3)
+            let lifted = slot.rect.offsetBy(dx: 0, dy: (1 - t) * -10)
+            // The halo is the front pet's alone.
+            if slot.distance == 0 {
                 glow(NSPoint(x: lifted.midX, y: lifted.midY),
-                     radius: lifted.width * 1.3, colour: entries[i].tint, alpha: t)
+                     radius: lifted.width * 1.15, colour: entries[slot.index].tint,
+                     alpha: t * bodyAlpha)
             }
-            draw(entries[i], in: lifted, lit: distance == 0, alpha: base * t, ctx: ctx)
+            draw(entries[slot.index], in: lifted, lit: slot.distance == 0,
+                 alpha: base * t * bodyAlpha, ctx: ctx)
         }
 
-        // The status pairing: whimsical word large, the real work beneath it.
-        guard !activeWord.isEmpty || !activeCaption.isEmpty else { return }
-        let t = stagger(3)
+        guard entries.indices.contains(activeIndex) else { return }
+        let t = stagger(3) * bodyAlpha
         guard t > 0.01 else { return }
-        // Rise into place as they fade, which is what makes the pairing land
-        // rather than appear.
-        let lift = (1 - t) * 8
-        let textY = body.minY + 52 - lift
+        let front = entries[activeIndex]
+        let lift = (1 - stagger(3)) * 8
+
+        // A short bar in the pet's own colour under the front slot, as the
+        // design has it — it anchors the selection without drawing a box.
+        let barW: CGFloat = 32
+        let bar = NSRect(x: body.midX - barW / 2,
+                         y: body.minY + Self.barY - lift, width: barW, height: 3)
+        front.tint.withAlphaComponent(0.9 * t).setFill()
+        NSBezierPath(roundedRect: bar, xRadius: 1.5, yRadius: 1.5).fill()
+
+        text(front.slug, 11.5, .semibold, NSColor(white: 0.78, alpha: t),
+             at: NSPoint(x: body.minX, y: body.minY + Self.nameY - lift),
+             maxWidth: body.width, centred: true)
         text(activeWord, 21, .semibold, NSColor(white: 1, alpha: t),
-             at: NSPoint(x: body.minX, y: textY), maxWidth: body.width, centred: true)
-        text(activeCaption, 12, .regular, NSColor(white: 0.54, alpha: t),
-             at: NSPoint(x: body.minX, y: textY - 24), maxWidth: body.width, centred: true)
+             at: NSPoint(x: body.minX, y: body.minY + Self.wordY - lift),
+             maxWidth: body.width, centred: true)
+        text(activeCaption, 12, .regular, NSColor(white: 0.52, alpha: t),
+             at: NSPoint(x: body.minX, y: body.minY + Self.captionY - lift),
+             maxWidth: body.width, centred: true)
     }
 
     // MARK: the activity feed
@@ -535,13 +605,13 @@ final class NotchShelfView: NSView {
             return
         }
         let body = bodyRect()
-        card(body, alpha: appear)
+        card(body, alpha: appear * bodyAlpha)
 
         let rowHeight: CGFloat = 44
         var y = body.maxY - 6
         let fits = max(0, Int((y - body.minY - 4) / rowHeight))
         for (i, row) in rows.prefix(fits).enumerated() {
-            let t = stagger(i)
+            let t = stagger(i) * bodyAlpha
             if t > 0.01 { draw(row, topY: y + (1 - t) * -8, height: rowHeight, alpha: t, body: body) }
             y -= rowHeight
         }
@@ -552,12 +622,9 @@ final class NotchShelfView: NSView {
         let midY = topY - height / 2
         let avatar = NSRect(x: body.minX + 16, y: midY - 13, width: 26, height: 26)
 
-        // A live row carries its arc and a faint bloom; a settled one is
-        // completely still, so a quiet row reads as finished without being read.
-        if row.state == .live {
-            glow(NSPoint(x: avatar.midX, y: avatar.midY), radius: 26,
-                 colour: row.tint, alpha: alpha)
-        }
+        // No bloom in the feed. A halo belongs to the pet at the front of the
+        // carousel and nowhere else — five of them turns a dark panel grey and
+        // the light stops meaning anything.
         let frame: NSImage? = row.state == .live && row.frames.count > 1
             ? row.frames[Int(clock * row.fps) % row.frames.count]
             : (row.frames.first ?? row.image)

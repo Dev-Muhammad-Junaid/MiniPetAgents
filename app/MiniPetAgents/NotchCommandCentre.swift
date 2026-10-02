@@ -34,7 +34,7 @@ final class NotchCommandCentre {
     /// Activity needs room for several rows; Pets does not. Height follows the
     /// mode so neither one is padded out to fit the other.
     private static func expandedHeight(for mode: NotchShelfView.Mode) -> CGFloat {
-        mode == .activity ? 326 : 240
+        mode == .activity ? 326 : 262
     }
     /// Hover has to be deliberate — without a delay the shelf flickers open
     /// every time the pointer crosses the top of the screen on its way
