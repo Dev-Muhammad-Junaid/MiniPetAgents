@@ -183,7 +183,8 @@ final class NotchCommandCentre {
         // being clipped under it.
         win.level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.mainMenuWindow)) + 1)
         win.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary]
-        win.ignoresMouseEvents = false
+        // Starts collapsed, so starts inert.
+        win.ignoresMouseEvents = true
 
         let view = NotchShelfView(frame: NSRect(origin: .zero, size: win.frame.size))
         view.onModeChanged = { [weak self] _ in self?.resizeForMode() }
@@ -195,6 +196,7 @@ final class NotchCommandCentre {
             self?.hostView?.setMode(.chat)
             self?.controller?.characters.first { $0.petSlug == slug }.map { _ in }
         }
+        view.onQuit = { NSApp.terminate(nil) }
         view.onActivate = { [weak self] in
             guard let self = self else { return }
             if self.stage != .expanded { self.setStage(.expanded) }
@@ -259,6 +261,12 @@ final class NotchCommandCentre {
         guard newStage != stage, let window = window,
               let screen = window.screen ?? NSScreen.main else { return }
         stage = newStage
+        // Collapsed, the window must not exist as far as the pointer is
+        // concerned. hitTest alone was not enough — a transparent window over
+        // the top of the screen was still intercepting clicks meant for the
+        // browser tabs underneath. Hover is polled from the tick, so ignoring
+        // mouse events costs nothing.
+        window.ignoresMouseEvents = (newStage == .collapsed)
         let shelf = shelfSize(on: screen, stage: newStage)
 
         // Spring, not a duration curve. Opening overshoots slightly so the

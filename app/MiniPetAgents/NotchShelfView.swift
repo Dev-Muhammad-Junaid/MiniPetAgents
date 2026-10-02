@@ -74,6 +74,7 @@ final class NotchShelfView: NSView {
     /// Clicking the pet already at the front opens it — the next step in the
     /// flow, rather than re-selecting what is already selected.
     var onOpenPet: ((String) -> Void)?
+    var onQuit: (() -> Void)?
     private var stage: NotchCommandCentre.Stage = .collapsed
     /// Size the shelf is drawn at right now, eased toward `targetShelf`.
     /// Animating the drawing instead of the window is what removed the hover
@@ -101,16 +102,37 @@ final class NotchShelfView: NSView {
 
     /// Rail pill frames, derived rather than recorded during drawing, so
     /// hit-testing cannot lag a frame behind what is on screen.
+    /// The chrome band at the top of the panel. Everything in it — the rail,
+    /// the summary, the quit button — is centred on this one rect, rather than
+    /// each being positioned from the panel edge separately, which is why they
+    /// were sitting at slightly different heights.
+    private static let chromeTopPadding: CGFloat = 10
+    private static let chromeHeight: CGFloat = 26
+
+    private func chromeRect() -> NSRect {
+        NSRect(x: settledRect.minX + 16,
+               y: settledRect.maxY - Self.chromeTopPadding - Self.chromeHeight,
+               width: settledRect.width - 32, height: Self.chromeHeight)
+    }
+
     private func railFrames() -> [(Mode, NSRect)] {
+        let chrome = chromeRect()
         var out: [(Mode, NSRect)] = []
-        var x = settledRect.minX + 18
-        let y = settledRect.maxY - 34
+        var x = chrome.minX + 2
         for m in Mode.allCases {
             let w = m.title.size(withAttributes: [.font: NSFont.systemFont(ofSize: 12, weight: .semibold)]).width + 28
-            out.append((m, NSRect(x: x, y: y, width: w, height: 24)))
+            out.append((m, NSRect(x: x, y: chrome.midY - 12, width: w, height: 24)))
             x += w + 4
         }
         return out
+    }
+
+    /// Quit lives at the far right of the chrome, so the shelf is a place you
+    /// can leave from. Before this the only way out was the menubar icon,
+    /// which is exactly the thing the notch is meant to replace.
+    private func quitFrame() -> NSRect {
+        let chrome = chromeRect()
+        return NSRect(x: chrome.maxX - 24, y: chrome.midY - 12, width: 24, height: 24)
     }
     private(set) var mode: Mode = .pets
     private(set) var rows: [ActivityRow] = []
@@ -253,6 +275,10 @@ final class NotchShelfView: NSView {
             return
         }
         let point = convert(event.locationInWindow, from: nil)
+        if quitFrame().insetBy(dx: -6, dy: -6).contains(point) {
+            onQuit?()
+            return
+        }
         // Generous vertical slop: the pills are 24pt tall and people aim at
         // the word, not the capsule.
         if let hit = railFrames().first(where: { $0.1.insetBy(dx: -2, dy: -8).contains(point) }) {
@@ -325,6 +351,7 @@ final class NotchShelfView: NSView {
         // The slab. Square at the top so it meets the screen edge with no
         // seam; rounded only at the bottom, so it looks moulded rather than
         // like a window that happens to be up there.
+        guard stage != .collapsed else { return }
         let b = shelfRect
         guard b.width > 1, b.height > 1 else { return }
         let r: CGFloat = min(26, b.height * 0.7)
@@ -343,11 +370,12 @@ final class NotchShelfView: NSView {
         ctx.setFillColor(NSColor.black.cgColor)
         ctx.fillPath()
 
-        switch stage {
-        case .collapsed: return drawCollapsed()
-        case .peek:      return drawResting(ctx)
-        case .expanded:  break
-        }
+
+        // Collapsed draws nothing — not even the slab. The shelf should be
+        // invisible until you go looking for it; a black bar parked on the
+        // menu bar is something you have to work around.
+        if stage == .collapsed { return }
+        if stage == .peek { return drawResting(ctx) }
         guard !entries.isEmpty || !rows.isEmpty else { return }
         drawRail()
         switch outgoingMode ?? mode {
@@ -429,11 +457,25 @@ final class NotchShelfView: NSView {
                  m == mode ? .white : NSColor(white: 0.56, alpha: 1),
                  at: NSPoint(x: pill.minX + 14, y: pill.maxY - 5))
         }
+        let chrome = chromeRect()
+        let quit = quitFrame()
         if !summary.isEmpty {
             text(summary, 11, .regular, NSColor(white: 0.52, alpha: 1),
-                 at: NSPoint(x: settledRect.maxX - 280, y: settledRect.maxY - 15),
-                 maxWidth: 262, rightAligned: true)
+                 at: NSPoint(x: quit.minX - 10 - 280, y: chrome.midY + 5),
+                 maxWidth: 280, rightAligned: true)
         }
+        // Quit: a plain cross, no fill, so it reads as an exit rather than an
+        // action you might want to take.
+        let cross = NSBezierPath()
+        let inset: CGFloat = 8
+        cross.move(to: NSPoint(x: quit.minX + inset, y: quit.minY + inset))
+        cross.line(to: NSPoint(x: quit.maxX - inset, y: quit.maxY - inset))
+        cross.move(to: NSPoint(x: quit.maxX - inset, y: quit.minY + inset))
+        cross.line(to: NSPoint(x: quit.minX + inset, y: quit.maxY - inset))
+        cross.lineWidth = 1.5
+        cross.lineCapStyle = .round
+        NSColor(white: 0.5, alpha: 1).setStroke()
+        cross.stroke()
     }
 
     // MARK: states
@@ -521,6 +563,12 @@ final class NotchShelfView: NSView {
     /// lets a two-finger swipe move it continuously — the pets travel with
     /// your fingers, the way a picker does, instead of cross-fading between
     /// fixed states.
+    /// Where each feed row currently sits, keyed by identity, so a row that
+    /// changes place slides there instead of teleporting. Without it a turn
+    /// finishing re-sorts the list and every row below it jumps a slot.
+    private var rowY: [String: CGFloat] = [:]
+    private var rowSettle: Timer?
+
     private var carousel: CGFloat = 0
     private var carouselVelocity: CGFloat = 0
     private var settleTimer: Timer?
@@ -631,8 +679,9 @@ final class NotchShelfView: NSView {
     /// The elevated card every body sits on.
     private func bodyRect() -> NSRect {
         let b = settledRect
+        let top = chromeRect().minY - 10
         return NSRect(x: b.minX + 14, y: b.minY + 12,
-                      width: b.width - 28, height: b.height - 58)
+                      width: b.width - 28, height: top - (b.minY + 12))
     }
 
     private func drawExpanded(_ ctx: CGGraphicsContextAlias) {
@@ -739,6 +788,12 @@ final class NotchShelfView: NSView {
         }
     }
 
+    /// Identity for a feed row. Pet plus provider plus what it was doing is
+    /// stable across a re-sort, which is what the slide needs to track.
+    private static func key(_ row: ActivityRow) -> String {
+        "\(row.name)|\(row.provider)|\(row.activity)"
+    }
+
     private func textWidth(_ s: String, _ size: CGFloat) -> CGFloat {
         s.size(withAttributes: [.font: NSFont.systemFont(ofSize: size)]).width
     }
@@ -763,12 +818,29 @@ final class NotchShelfView: NSView {
         card(body, alpha: appear * bodyAlpha)
 
         let rowHeight: CGFloat = 44
-        var y = body.maxY - 6
-        let fits = max(0, Int((y - body.minY - 4) / rowHeight))
-        for (i, row) in rows.prefix(fits).enumerated() {
+        let top = body.maxY - 6
+        let fits = max(0, Int((top - body.minY - 4) / rowHeight))
+        let visible = Array(rows.prefix(fits))
+
+        // Target position per row, then ease whatever is on screen toward it.
+        var targets: [String: CGFloat] = [:]
+        for (i, row) in visible.enumerated() { targets[Self.key(row)] = top - CGFloat(i) * rowHeight }
+        var moving = false
+        for (key, target) in targets {
+            let current = rowY[key] ?? target
+            let next = current + (target - current) * 0.22
+            if abs(target - next) > 0.4 { moving = true } 
+            rowY[key] = abs(target - next) < 0.4 ? target : next
+        }
+        // Drop rows that have left the feed so the map can't grow forever.
+        rowY = rowY.filter { targets[$0.key] != nil }
+        if moving { needsDisplay = true }
+
+        for (i, row) in visible.enumerated() {
             let t = stagger(i) * bodyAlpha
-            if t > 0.01 { draw(row, topY: y + (1 - t) * -8, height: rowHeight, alpha: t, body: body) }
-            y -= rowHeight
+            guard t > 0.01 else { continue }
+            let y = rowY[Self.key(row)] ?? (top - CGFloat(i) * rowHeight)
+            draw(row, topY: y + (1 - t) * -8, height: rowHeight, alpha: t, body: body)
         }
     }
 
