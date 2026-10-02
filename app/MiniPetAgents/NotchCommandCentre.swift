@@ -28,18 +28,28 @@ final class NotchCommandCentre {
     private static let restingFallbackWidth: CGFloat = 168
     /// How much wider than the cut-out the peek runs — enough for the active
     /// pet and the roster dots to sit on the visible strips either side.
-    private static let peekPadding: CGFloat = 210
+    /// Peek stays narrow: it only has to show who is active and how many
+    /// others there are, and every extra point is menu bar it covers.
+    private static let peekPadding: CGFloat = 150
     private static let restingHeight: CGFloat = 36
     private static let expandedWidth: CGFloat = 620
     /// Activity needs room for several rows; Pets does not. Height follows the
     /// mode so neither one is padded out to fit the other.
     private static func expandedHeight(for mode: NotchShelfView.Mode) -> CGFloat {
-        mode == .activity ? 326 : 262
+        switch mode {
+        case .activity: return 326
+        case .chat:     return 300
+        case .pets:     return 262
+        }
     }
     /// Hover has to be deliberate — without a delay the shelf flickers open
     /// every time the pointer crosses the top of the screen on its way
     /// somewhere else.
-    private static let hoverIntent: TimeInterval = 0.14
+    /// A full second before the shelf reacts. It sits over the menu bar, so
+    /// anything shorter means reaching for Window or Help opens a panel on top
+    /// of the menu you were aiming at — it stopped being a polish question and
+    /// started costing the user clicks.
+    private static let hoverIntent: TimeInterval = 1.0
     /// Grace period before collapsing — the fix for "it flickers and I can't
     /// do anything with it".
     private static let hoverExitGrace: TimeInterval = 0.45
@@ -90,6 +100,10 @@ final class NotchCommandCentre {
 
     /// Resting width: the hardware cut-out where there is one, so the shelf
     /// costs the user no menu-bar space at all.
+    /// True while the shelf is small enough that it is sharing the menu bar
+    /// and should stay out of the way.
+    var isPassive: Bool { stage == .collapsed }
+
     /// Collapsed width: the cut-out plus a strip either side.
     ///
     /// Exactly the cut-out would be invisible — that region is not a display
@@ -174,6 +188,13 @@ final class NotchCommandCentre {
         let view = NotchShelfView(frame: NSRect(origin: .zero, size: win.frame.size))
         view.onModeChanged = { [weak self] _ in self?.resizeForMode() }
         // A click is what opens the panel. Hover only ever peeks.
+        view.onOpenPet = { [weak self] slug in
+            // Clicking the pet that is already at the front opens its
+            // conversation in place, rather than dropping the user into a
+            // separate window — the shelf is the surface now.
+            self?.hostView?.setMode(.chat)
+            self?.controller?.characters.first { $0.petSlug == slug }.map { _ in }
+        }
         view.onActivate = { [weak self] in
             guard let self = self else { return }
             if self.stage != .expanded { self.setStage(.expanded) }
@@ -270,6 +291,7 @@ final class NotchCommandCentre {
             view.update(entries: NotchDemoData.entries())
             view.update(rows: NotchDemoData.rows(), summary: NotchDemoData.summary)
             view.update(word: NotchDemoData.word, caption: NotchDemoData.caption)
+            view.update(chat: NotchDemoData.chat())
             return
         }
 

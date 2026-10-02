@@ -14,8 +14,20 @@ final class NotchShelfView: NSView {
     /// Chat is deliberately absent until it actually works; a rail segment
     /// that opens an empty panel is worse than one that isn't there yet.
     enum Mode: CaseIterable {
-        case pets, activity
-        var title: String { self == .pets ? "Pets" : "Activity" }
+        case pets, chat, activity
+        var title: String {
+            switch self {
+            case .pets:     return "Pets"
+            case .chat:     return "Chat"
+            case .activity: return "Activity"
+            }
+        }
+    }
+
+    /// One line of a conversation, flattened for drawing.
+    struct ChatLine {
+        let isUser: Bool
+        let text: String
     }
 
     struct Entry {
@@ -59,6 +71,9 @@ final class NotchShelfView: NSView {
     var onModeChanged: ((Mode) -> Void)?
     /// A click anywhere that isn't a control — this is what opens the panel.
     var onActivate: (() -> Void)?
+    /// Clicking the pet already at the front opens it — the next step in the
+    /// flow, rather than re-selecting what is already selected.
+    var onOpenPet: ((String) -> Void)?
     private var stage: NotchCommandCentre.Stage = .collapsed
     /// Size the shelf is drawn at right now, eased toward `targetShelf`.
     /// Animating the drawing instead of the window is what removed the hover
@@ -104,6 +119,7 @@ final class NotchShelfView: NSView {
     /// Running the test suite" pairing from the design.
     private(set) var activeWord: String = ""
     private(set) var activeCaption: String = ""
+    private(set) var chat: [ChatLine] = []
     /// 0→1 after the panel opens. Drives the staggered arrival so the roster
     /// assembles rather than snapping into place.
     private var appear: CGFloat = 0
@@ -165,6 +181,11 @@ final class NotchShelfView: NSView {
     func update(rows: [ActivityRow], summary: String) {
         self.rows = rows
         self.summary = summary
+        needsDisplay = true
+    }
+
+    func update(chat lines: [ChatLine]) {
+        chat = lines
         needsDisplay = true
     }
 
@@ -240,11 +261,9 @@ final class NotchShelfView: NSView {
         }
         // Clicking a pet in the character select makes it active.
         guard mode == .pets, !entries.isEmpty else { return }
-        if let hit = slots().first(where: { $0.rect.insetBy(dx: -4, dy: -4).contains(point) }),
-           hit.index != activeIndex {
-            activeIndex = hit.index
-            restartAppear()
-            needsDisplay = true
+        if let hit = slots().first(where: { $0.rect.insetBy(dx: -4, dy: -4).contains(point) }) {
+            if hit.index == activeIndex { onOpenPet?(entries[hit.index].slug) }
+            else { select(hit.index) }
         }
     }
 
@@ -286,7 +305,18 @@ final class NotchShelfView: NSView {
     /// clicks across the whole top of the screen.
     override func hitTest(_ point: NSPoint) -> NSView? {
         let local = convert(point, from: superview)
-        return settledRect.contains(local) ? self : nil
+        guard settledRect.contains(local) else { return nil }
+        // Collapsed, only the pet itself is clickable. The rest of the shelf
+        // is sitting on the menu bar and must let clicks through, or reaching
+        // for a menu lands on an invisible window instead.
+        if stage == .collapsed {
+            let b = shelfRect
+            let size = min(22, b.height - 8)
+            let pet = NSRect(x: b.minX + 11, y: b.midY - size / 2,
+                             width: size, height: size).insetBy(dx: -6, dy: -4)
+            return pet.contains(local) ? self : nil
+        }
+        return self
     }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -322,6 +352,7 @@ final class NotchShelfView: NSView {
         drawRail()
         switch outgoingMode ?? mode {
         case .pets:     drawExpanded(ctx)
+        case .chat:     drawChat()
         case .activity: drawActivity()
         }
     }
@@ -478,52 +509,105 @@ final class NotchShelfView: NSView {
     struct Slot {
         let index: Int
         let rect: NSRect
-        let distance: Int
+        /// 0 at the front, growing with distance. Fractional, because the row
+        /// is a continuous position rather than a set of discrete places.
+        let distance: CGFloat
     }
 
-    /// The carousel as a ring. The active pet is always dead centre and its
-    /// neighbours fall away either side; with five or more pets the roster
-    /// wraps, so the row is balanced no matter which pet is selected. Centring
-    /// the *group* instead left the front pet visibly off-centre whenever the
-    /// selection sat at either end — a character selector has to put the
-    /// thing you are choosing in the middle.
+    /// The carousel's position, in roster units. 2.0 means pet 2 is centred;
+    /// 2.5 means the row is halfway between 2 and 3.
+    ///
+    /// Everything about the row is derived from this one number, which is what
+    /// lets a two-finger swipe move it continuously — the pets travel with
+    /// your fingers, the way a picker does, instead of cross-fading between
+    /// fixed states.
+    private var carousel: CGFloat = 0
+    private var carouselVelocity: CGFloat = 0
+    private var settleTimer: Timer?
+
+    private func wrapped(_ i: Int) -> Int {
+        let n = entries.count
+        guard n > 0 else { return 0 }
+        return ((i % n) + n) % n
+    }
+
     private func slots() -> [Slot] {
         let n = entries.count
         guard n > 0 else { return [] }
-        let active: CGFloat = 74, neighbour: CGFloat = 48, far: CGFloat = 34, gap: CGFloat = 18
         let body = bodyRect()
         let baseline = body.minY + Self.rowCentre(in: body)
-        let wraps = n >= 5
-
-        func size(_ d: Int) -> CGFloat { d == 0 ? active : (d == 1 ? neighbour : far) }
-        func entry(_ offset: Int) -> Int? {
-            let raw = activeIndex + offset
-            if wraps { return ((raw % n) + n) % n }
-            return (0..<n).contains(raw) ? raw : nil
-        }
+        let spacing: CGFloat = 78
+        let centre = Int(carousel.rounded())
 
         var out: [Slot] = []
-        out.append(Slot(index: activeIndex,
-                        rect: NSRect(x: body.midX - active / 2, y: baseline - active / 2,
-                                     width: active, height: active),
-                        distance: 0))
-        var left = body.midX - active / 2 - gap
-        var right = body.midX + active / 2 + gap
-        for d in 1...2 {
-            let sz = size(d)
-            if let i = entry(-d) {
-                left -= sz
-                out.append(Slot(index: i, rect: NSRect(x: left, y: baseline - sz / 2,
-                                                       width: sz, height: sz), distance: d))
-                left -= gap
-            }
-            if let i = entry(d) {
-                out.append(Slot(index: i, rect: NSRect(x: right, y: baseline - sz / 2,
-                                                       width: sz, height: sz), distance: d))
-                right += sz + gap
-            }
+        for step in -3...3 {
+            let slotIndex = centre + step
+            if n < 5, !(0..<n).contains(slotIndex) { continue }
+            // Signed offset from the centre of the row, in slot units.
+            let offset = CGFloat(slotIndex) - carousel
+            let d = abs(offset)
+            guard d < 3.2 else { continue }
+            // Size falls off with distance; interpolating rather than
+            // stepping is what makes a swipe read as one continuous move.
+            let size = max(28, 76 - d * 21)
+            let x = body.midX + offset * spacing
+            out.append(Slot(index: wrapped(slotIndex),
+                            rect: NSRect(x: x - size / 2, y: baseline - size / 2,
+                                         width: size, height: size),
+                            distance: d))
         }
-        return out
+        // Far slots first so nearer pets overlap them, never the other way.
+        return out.sorted { $0.distance > $1.distance }
+    }
+
+    /// Two-finger swipe moves the row directly.
+    override func scrollWheel(with event: NSEvent) {
+        guard stage == .expanded, mode == .pets, entries.count > 1 else { return }
+        settleTimer?.invalidate()
+        let delta = event.scrollingDeltaX != 0 ? event.scrollingDeltaX : event.scrollingDeltaY
+        carousel -= delta / 90
+        if entries.count < 5 {
+            carousel = min(max(0, carousel), CGFloat(entries.count - 1))
+        }
+        activeIndex = wrapped(Int(carousel.rounded()))
+        needsDisplay = true
+        if event.phase == .ended || event.momentumPhase == .ended || event.phase == [] {
+            settle(to: carousel.rounded())
+        }
+    }
+
+    /// Spring the row onto the nearest pet. Critically damped-ish: it arrives
+    /// and stops, with no bounce — a picker that wobbles feels broken.
+    private func settle(to target: CGFloat) {
+        settleTimer?.invalidate()
+        let t = Timer(timeInterval: 1.0 / 60.0, repeats: true) { [weak self] timer in
+            guard let self = self else { return timer.invalidate() }
+            let gap = target - self.carousel
+            self.carouselVelocity = self.carouselVelocity * 0.72 + gap * 0.28
+            self.carousel += self.carouselVelocity
+            if abs(gap) < 0.002, abs(self.carouselVelocity) < 0.002 {
+                self.carousel = target
+                self.carouselVelocity = 0
+                timer.invalidate()
+            }
+            self.activeIndex = self.wrapped(Int(self.carousel.rounded()))
+            self.needsDisplay = true
+        }
+        RunLoop.main.add(t, forMode: .common)
+        settleTimer = t
+    }
+
+    /// Clicking a pet slides the row to it rather than cutting.
+    func select(_ index: Int) {
+        guard entries.indices.contains(index) else { return }
+        let n = CGFloat(entries.count)
+        var target = CGFloat(index)
+        // Travel the short way round the ring.
+        if entries.count >= 5 {
+            while target - carousel > n / 2 { target -= n }
+            while carousel - target > n / 2 { target += n }
+        }
+        settle(to: target)
     }
 
     /// Largest rect of `size`'s aspect ratio that fits inside `bounds`.
@@ -556,17 +640,20 @@ final class NotchShelfView: NSView {
         card(body, alpha: appear * bodyAlpha)
 
         for slot in slots() {
-            let t = stagger(slot.distance)
+            let t = stagger(Int(slot.distance.rounded()))
             guard t > 0.01 else { continue }
-            let base: CGFloat = slot.distance == 0 ? 1.0 : (slot.distance == 1 ? 0.5 : 0.3)
+            // Opacity falls off continuously with distance too, so nothing
+            // pops as it passes the front.
+            let base = max(0.26, 1 - slot.distance * 0.36)
             let lifted = slot.rect.offsetBy(dx: 0, dy: (1 - t) * -10)
-            // The halo is the front pet's alone.
-            if slot.distance == 0 {
+            // The halo belongs to whatever is at the front, fading as the row
+            // moves so it travels with the selection instead of jumping.
+            if slot.distance < 1 {
                 glow(NSPoint(x: lifted.midX, y: lifted.midY),
                      radius: lifted.width * 1.15, colour: entries[slot.index].tint,
-                     alpha: t * bodyAlpha)
+                     alpha: (1 - slot.distance) * t * bodyAlpha)
             }
-            draw(entries[slot.index], in: lifted, lit: slot.distance == 0,
+            draw(entries[slot.index], in: lifted, lit: slot.distance < 0.5,
                  alpha: base * t * bodyAlpha, ctx: ctx)
         }
 
@@ -593,6 +680,74 @@ final class NotchShelfView: NSView {
         text(activeCaption, 12, .regular, NSColor(white: 0.52, alpha: t),
              at: NSPoint(x: body.minX, y: body.minY + Self.captionY - lift),
              maxWidth: body.width, centred: true)
+    }
+
+    // MARK: chat
+
+    /// The conversation with whichever pet is at the front of the carousel —
+    /// so switching pets switches the thread, and the roster stays the context
+    /// for every mode.
+    private func drawChat() {
+        let body = bodyRect()
+        card(body, alpha: appear * bodyAlpha)
+
+        // Composer sits on the floor of the card, where a reply would be typed.
+        let field = NSRect(x: body.minX + 14, y: body.minY + 12,
+                           width: body.width - 28, height: 34)
+        NSColor(white: 0.13, alpha: appear * bodyAlpha).setFill()
+        NSBezierPath(roundedRect: field, xRadius: 17, yRadius: 17).fill()
+        let who = entries.indices.contains(activeIndex) ? entries[activeIndex].slug : "the pet"
+        text("Ask \(who)…", 13, .regular,
+             NSColor(white: 0.44, alpha: appear * bodyAlpha),
+             at: NSPoint(x: field.minX + 16, y: field.maxY - 9), maxWidth: field.width - 32)
+        // A caret that blinks, so the field reads as ready rather than drawn.
+        if appear > 0.9 {
+            let on = sin(clock * 3.4) > 0
+            if on {
+                NSColor(white: 0.7, alpha: 0.8 * bodyAlpha).setFill()
+                NSBezierPath(rect: NSRect(x: field.minX + 16 + textWidth("Ask \(who)…", 13) + 3,
+                                          y: field.midY - 7, width: 1.5, height: 14)).fill()
+            }
+        }
+
+        guard !chat.isEmpty else {
+            text("No conversation yet.", 13, .regular,
+                 NSColor(white: 0.44, alpha: appear * bodyAlpha),
+                 at: NSPoint(x: body.minX + 18, y: body.maxY - 20), maxWidth: body.width - 36)
+            return
+        }
+
+        // Newest at the bottom, filling upward, so the latest reply is nearest
+        // the composer — the same way every chat in the world reads.
+        var y = field.maxY + 16
+        for (i, line) in chat.reversed().enumerated() {
+            let t = stagger(i) * bodyAlpha
+            guard t > 0.01 else { break }
+            let maxW = body.width - 56
+            let h = max(22, ceil(textHeight(line.text, 13, maxW - 24)) + 16)
+            guard y + h < body.maxY - 8 else { break }
+            let w = min(maxW, textWidth(line.text, 13) + 26)
+            let bubble = NSRect(x: line.isUser ? body.maxX - 18 - w : body.minX + 18,
+                                y: y + (1 - t) * -6, width: w, height: h)
+            (line.isUser ? NSColor(white: 0.19, alpha: t)
+                         : NSColor(white: 0.11, alpha: t)).setFill()
+            NSBezierPath(roundedRect: bubble, xRadius: 13, yRadius: 13).fill()
+            text(line.text, 13, .regular,
+                 NSColor(white: line.isUser ? 0.96 : 0.82, alpha: t),
+                 at: NSPoint(x: bubble.minX + 13, y: bubble.maxY - 7), maxWidth: w - 26)
+            y += h + 8
+        }
+    }
+
+    private func textWidth(_ s: String, _ size: CGFloat) -> CGFloat {
+        s.size(withAttributes: [.font: NSFont.systemFont(ofSize: size)]).width
+    }
+
+    private func textHeight(_ s: String, _ size: CGFloat, _ width: CGFloat) -> CGFloat {
+        let attrs: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: size)]
+        return NSAttributedString(string: s, attributes: attrs)
+            .boundingRect(with: NSSize(width: width, height: 400),
+                          options: [.usesLineFragmentOrigin]).height
     }
 
     // MARK: the activity feed

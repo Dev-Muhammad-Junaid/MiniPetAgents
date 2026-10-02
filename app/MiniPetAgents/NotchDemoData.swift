@@ -93,6 +93,16 @@ enum NotchDemoData {
         ]
     }
 
+    /// A short seeded conversation so Chat can be seen working.
+    static func chat() -> [NotchShelfView.ChatLine] {
+        [
+            .init(isUser: true,  text: "run the test suite and tell me what broke"),
+            .init(isUser: false, text: "Running it now — 169 checks. Two failed, both in the sprite pack loader."),
+            .init(isUser: true,  text: "what's the common cause?"),
+            .init(isUser: false, text: "Both read a frame index past the end of a row. The padding cells again."),
+        ]
+    }
+
     static let summary = "demo data · 6 turns · 33k · $0.39"
     static let word = "Spelunking"
     static let caption = "running the test suite · 14s · 2.1k"
