@@ -20,9 +20,22 @@ final class NotchShelfView: NSView {
 
     struct Entry {
         let slug: String
-        let image: NSImage
+        /// The pet's full animation for whatever it is doing, not one frozen
+        /// frame. A still sprite in the notch is the single biggest reason the
+        /// shelf read as dead.
+        let frames: [NSImage]
+        let fps: Double
         let tint: NSColor
         let isBusy: Bool
+
+        var image: NSImage? { frames.first }
+
+        /// The frame for a given moment, cycling at the pack's own rate.
+        func frame(at time: CFTimeInterval) -> NSImage? {
+            guard !frames.isEmpty else { return nil }
+            guard frames.count > 1, fps > 0 else { return frames[0] }
+            return frames[Int(time * fps) % frames.count]
+        }
     }
 
     /// One row of the feed, flattened for drawing. Built by the command centre
@@ -36,6 +49,10 @@ final class NotchShelfView: NSView {
         let remedy: String?        // inline fix, e.g. "Sign in"
         let tint: NSColor
         let image: NSImage?
+        /// Live rows animate; settled ones hold one frame, so motion in the
+        /// feed always means "still happening".
+        var frames: [NSImage] = []
+        var fps: Double = 8
     }
 
     var onHoverChanged: ((Bool) -> Void)?
@@ -91,12 +108,30 @@ final class NotchShelfView: NSView {
     /// assembles rather than snapping into place.
     private var appear: CGFloat = 0
     private var appearTimer: Timer?
+    /// Drives sprite playback and every breathing/pulsing value. One timer for
+    /// the whole shelf — the pets are already decoded, so this is just a
+    /// redraw at the pack's own frame rate.
+    private var heartbeat: Timer?
+    private var clock: CFTimeInterval { CACurrentMediaTime() }
     private(set) var entries: [Entry] = []
     private(set) var activeIndex = 0
     private var expanded = false
     private var trackingArea: NSTrackingArea?
 
     override var isFlipped: Bool { false }
+
+    /// Start once the view is in a window; stop when it leaves, so a hidden
+    /// shelf costs nothing.
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        heartbeat?.invalidate()
+        guard window != nil else { return }
+        let t = Timer(timeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in
+            self?.needsDisplay = true
+        }
+        RunLoop.main.add(t, forMode: .common)
+        heartbeat = t
+    }
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
@@ -341,10 +376,30 @@ final class NotchShelfView: NSView {
         let b = shelfRect
         guard let entry = entries.indices.contains(activeIndex) ? entries[activeIndex] : entries.first
         else { return }
-        let d: CGFloat = entry.isBusy ? 8 : 6
-        let rect = NSRect(x: b.minX + 14, y: b.midY - d / 2, width: d, height: d)
-        entry.tint.withAlphaComponent(entry.isBusy ? 1.0 : 0.75).setFill()
-        NSBezierPath(ovalIn: rect).fill()
+
+        // Left strip: the active pet, animating. A character that is actually
+        // moving is what tells you the app is alive; a dot only tells you it
+        // is installed.
+        let size = min(22, b.height - 8)
+        let petRect = NSRect(x: b.minX + 11, y: b.midY - size / 2, width: size, height: size)
+        if let image = entry.frame(at: clock) {
+            glow(NSPoint(x: petRect.midX, y: petRect.midY), radius: size * 1.1,
+                 colour: entry.tint, alpha: entry.isBusy ? 0.9 : 0.35)
+            image.draw(in: Self.aspectFit(image.size, in: petRect), from: .zero,
+                       operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
+        }
+
+        // Right strip: one dot per other pet, the busy ones breathing.
+        let others = entries.enumerated().filter { $0.offset != activeIndex }.map { $0.element }
+        let dot: CGFloat = 6
+        var x = b.maxX - 11 - CGFloat(min(others.count, 3)) * (dot + 4)
+        for other in others.prefix(3) {
+            let pulse = other.isBusy ? 0.55 + 0.45 * CGFloat(0.5 + 0.5 * sin(clock * 2.4)) : 0.5
+            other.tint.withAlphaComponent(pulse).setFill()
+            NSBezierPath(ovalIn: NSRect(x: x, y: b.midY - dot / 2,
+                                        width: dot, height: dot)).fill()
+            x += dot + 4
+        }
     }
 
     private func drawResting(_ ctx: CGGraphicsContextAlias) {
@@ -494,7 +549,10 @@ final class NotchShelfView: NSView {
             glow(NSPoint(x: avatar.midX, y: avatar.midY), radius: 26,
                  colour: row.tint, alpha: alpha)
         }
-        if let image = row.image {
+        let frame: NSImage? = row.state == .live && row.frames.count > 1
+            ? row.frames[Int(clock * row.fps) % row.frames.count]
+            : (row.frames.first ?? row.image)
+        if let image = frame {
             image.draw(in: Self.aspectFit(image.size, in: avatar), from: .zero,
                        operation: .sourceOver,
                        fraction: (row.state == .live ? 1.0 : 0.72) * alpha,
@@ -504,9 +562,10 @@ final class NotchShelfView: NSView {
             NSBezierPath(ovalIn: avatar).fill()
         }
         if row.state == .live {
+            let spin = clock.truncatingRemainder(dividingBy: 2.6) / 2.6 * 360
             let arc = NSBezierPath()
             arc.appendArc(withCenter: NSPoint(x: avatar.midX, y: avatar.midY),
-                          radius: avatar.width / 2 + 6, startAngle: 40, endAngle: 300)
+                          radius: avatar.width / 2 + 6, startAngle: spin, endAngle: spin + 260)
             arc.lineWidth = 2
             arc.lineCapStyle = .round
             row.tint.withAlphaComponent(0.95 * alpha).setStroke()
@@ -571,9 +630,20 @@ final class NotchShelfView: NSView {
         }
         // Sprite frames are taller than they are wide; drawing them into a
         // square stretches the pet. Fit, don't fill.
-        entry.image.draw(in: Self.aspectFit(entry.image.size, in: rect),
-                         from: .zero, operation: .sourceOver,
-                         fraction: alpha, respectFlipped: true, hints: nil)
+        guard let image = entry.frame(at: clock) else { return }
+        var box = rect
+        if lit {
+            // A slow breath on the active pet. Barely perceptible on any one
+            // frame, but it is the difference between a character standing
+            // there and a picture of one.
+            let breath = 1 + 0.025 * CGFloat(sin(clock * 1.9))
+            box = NSRect(x: rect.midX - rect.width * breath / 2,
+                         y: rect.midY - rect.height * breath / 2,
+                         width: rect.width * breath, height: rect.height * breath)
+        }
+        image.draw(in: Self.aspectFit(image.size, in: box),
+                   from: .zero, operation: .sourceOver,
+                   fraction: alpha, respectFlipped: true, hints: nil)
 
         // Status ring: a gap in the stroke while the agent is working, a
         // closed quiet ring otherwise. Motion carries state; identity does not.
@@ -587,9 +657,11 @@ final class NotchShelfView: NSView {
         entry.tint.withAlphaComponent(entry.isBusy ? 0.16 : 0.3).setStroke()
         quiet.stroke()
         if entry.isBusy {
+            // Turning, not static: the arc sweeps once every 2.6s.
+            let spin = clock.truncatingRemainder(dividingBy: 2.6) / 2.6 * 360
             let arc = NSBezierPath()
             arc.appendArc(withCenter: NSPoint(x: ring.midX, y: ring.midY),
-                          radius: d / 2, startAngle: 40, endAngle: 300)
+                          radius: d / 2, startAngle: spin, endAngle: spin + 260)
             arc.lineWidth = 2
             arc.lineCapStyle = .round
             entry.tint.withAlphaComponent(0.95).setStroke()

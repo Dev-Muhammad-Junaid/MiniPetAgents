@@ -29,19 +29,28 @@ enum NotchDemoData {
 
     /// One roster entry per installed pet, cycling through the status colours
     /// so every state is visible at once.
+    /// One roster entry per installed pet, each playing a *different* sprite
+    /// state, so the shelf shows the whole animation vocabulary at once rather
+    /// than five copies of the same idle pose.
     static func entries() -> [NotchShelfView.Entry] {
-        let tints: [NSColor] = [calm, good, wait, review, bad]
-        let busy = [true, true, false, false, false]
+        let script: [(PetState, NSColor, Bool)] = [
+            (.running,  calm,   true),    // the active one, hard at work
+            (.runRight, good,   true),
+            (.waving,   wait,   false),
+            (.review,   review, false),
+            (.failed,   bad,    false),
+        ]
         var out: [NotchShelfView.Entry] = []
         for (i, pet) in PetLibrary.shared.pets.prefix(5).enumerated() {
             guard let pack = pet.loadPack() else { continue }
-            // A walking frame reads better than idle at roster size.
-            let frames = pack.frames[.runRight] ?? pack.frames[.idle] ?? []
-            guard let image = frames.first else { continue }
+            let (state, tint, busy) = script[i % script.count]
+            let frames = pack.frames[state] ?? pack.frames[.idle] ?? []
+            guard !frames.isEmpty else { continue }
             out.append(NotchShelfView.Entry(slug: pet.slug,
-                                            image: image,
-                                            tint: tints[i % tints.count],
-                                            isBusy: busy[i % busy.count]))
+                                            frames: frames,
+                                            fps: pack.metadata.animations[state]?.fps ?? 8,
+                                            tint: tint,
+                                            isBusy: busy))
         }
         return out
     }
@@ -51,18 +60,20 @@ enum NotchDemoData {
     static func rows() -> [NotchShelfView.ActivityRow] {
         let names = PetLibrary.shared.pets.map { $0.slug }
         func name(_ i: Int) -> String { i < names.count ? names[i] : "pet \(i + 1)" }
-        let images = entries().map { $0.image }
-        func image(_ i: Int) -> NSImage? { i < images.count ? images[i] : nil }
+        let packs = entries()
+        func image(_ i: Int) -> NSImage? { i < packs.count ? packs[i].image : nil }
+        func frames(_ i: Int) -> [NSImage] { i < packs.count ? packs[i].frames : [] }
+        func fps(_ i: Int) -> Double { i < packs.count ? packs[i].fps : 8 }
 
         return [
             .init(name: name(0), provider: "Claude",
                   activity: "Spelunking · running the test suite",
                   state: .live, trailing: "14s · 2.1k", remedy: nil,
-                  tint: calm, image: image(0)),
+                  tint: calm, image: image(0), frames: frames(0), fps: fps(0)),
             .init(name: name(1), provider: "Codex",
                   activity: "Percolating · reading the diff",
                   state: .live, trailing: "9s · 840", remedy: nil,
-                  tint: good, image: image(1)),
+                  tint: good, image: image(1), frames: frames(1), fps: fps(1)),
             .init(name: name(2), provider: "Cursor",
                   activity: "Bash · npm run build",
                   state: .done, trailing: "1m 12s · 8.4k · $0.11", remedy: nil,

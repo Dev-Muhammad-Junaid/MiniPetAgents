@@ -90,9 +90,17 @@ final class NotchCommandCentre {
 
     /// Resting width: the hardware cut-out where there is one, so the shelf
     /// costs the user no menu-bar space at all.
+    /// Collapsed width: the cut-out plus a strip either side.
+    ///
+    /// Exactly the cut-out would be invisible — that region is not a display
+    /// area, so nothing drawn in it renders. 38pt each side gives the pet and
+    /// its status dots somewhere to actually appear while still costing almost
+    /// no menu-bar space.
+    private static let collapsedStrip: CGFloat = 38
+
     private static func restingWidth(on screen: NSScreen) -> CGFloat {
         let notch = notchWidth(for: screen)
-        return notch > 0 ? notch : restingFallbackWidth
+        return notch > 0 ? notch + collapsedStrip * 2 : restingFallbackWidth
     }
 
     /// The window never changes size. Resizing it on hover was the flicker:
@@ -267,9 +275,14 @@ final class NotchCommandCentre {
 
         guard let controller = controller else { return }
         let pets: [NotchShelfView.Entry] = controller.characters.compactMap { pet in
-            guard let frameImage = pet.currentSpriteFrame() else { return nil }
+            // Hand the shelf the whole animation for whatever the pet is
+            // doing, so it plays rather than freezing on one frame.
+            guard let pack = pet.petPack else { return nil }
+            let frames = pack.frames[pet.spriteState] ?? pack.frames[.idle] ?? []
+            guard !frames.isEmpty else { return nil }
             return NotchShelfView.Entry(slug: pet.petSlug,
-                                        image: frameImage,
+                                        frames: frames,
+                                        fps: pack.metadata.animations[pet.spriteState]?.fps ?? 8,
                                         tint: Self.statusColour(for: pet.spriteState),
                                         isBusy: pet.isAgentBusy)
         }
