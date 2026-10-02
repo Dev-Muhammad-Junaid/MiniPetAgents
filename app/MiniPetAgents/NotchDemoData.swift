@@ -83,4 +83,6 @@ enum NotchDemoData {
     }
 
     static let summary = "demo data · 6 turns · 33k · $0.39"
+    static let word = "Spelunking"
+    static let caption = "running the test suite · 14s · 2.1k"
 }

@@ -261,6 +261,7 @@ final class NotchCommandCentre {
         if NotchDemoData.isEnabled {
             view.update(entries: NotchDemoData.entries())
             view.update(rows: NotchDemoData.rows(), summary: NotchDemoData.summary)
+            view.update(word: NotchDemoData.word, caption: NotchDemoData.caption)
             return
         }
 
@@ -286,6 +287,11 @@ final class NotchCommandCentre {
                 remedy: record.remedy?.title,
                 tint: Self.tint(for: record.state),
                 image: bySlug[record.petSlug]?.currentSpriteFrame())
+        }
+        if let active = controller.characters.first {
+            let live = store.live.first { $0.petSlug == active.petSlug }
+            view.update(word: live == nil ? "Idle" : "Working",
+                        caption: live?.activity ?? active.resolvedProvider.displayName)
         }
         let totals = store.totals()
         view.update(rows: Array(rows),

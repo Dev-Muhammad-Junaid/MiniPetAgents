@@ -52,17 +52,45 @@ final class NotchShelfView: NSView {
 
     /// The drawn shelf, in view coordinates: centred horizontally, anchored to
     /// the top edge so it always meets the screen edge.
-    var shelfRect: NSRect {
-        NSRect(x: (bounds.width - currentShelf.width) / 2,
-               y: bounds.maxY - currentShelf.height,
-               width: currentShelf.width, height: currentShelf.height)
+    var shelfRect: NSRect { rect(for: currentShelf) }
+
+    /// Where the shelf is *going*. Everything interactive measures against
+    /// this, never against `shelfRect` — a control that is hit-tested while
+    /// its rectangle is still animating is a control you cannot reliably
+    /// click, which is exactly how the Activity tab came to swallow clicks
+    /// and drop the panel.
+    var settledRect: NSRect { rect(for: targetShelf) }
+
+    private func rect(for size: NSSize) -> NSRect {
+        NSRect(x: (bounds.width - size.width) / 2,
+               y: bounds.maxY - size.height,
+               width: size.width, height: size.height)
+    }
+
+    /// Rail pill frames, derived rather than recorded during drawing, so
+    /// hit-testing cannot lag a frame behind what is on screen.
+    private func railFrames() -> [(Mode, NSRect)] {
+        var out: [(Mode, NSRect)] = []
+        var x = settledRect.minX + 18
+        let y = settledRect.maxY - 34
+        for m in Mode.allCases {
+            let w = m.title.size(withAttributes: [.font: NSFont.systemFont(ofSize: 12, weight: .semibold)]).width + 28
+            out.append((m, NSRect(x: x, y: y, width: w, height: 24)))
+            x += w + 4
+        }
+        return out
     }
     private(set) var mode: Mode = .pets
     private(set) var rows: [ActivityRow] = []
     private(set) var summary: String = ""
-    /// Rail segment frames, recomputed on every draw so hit-testing can never
-    /// disagree with what is on screen.
-    private var railHits: [(Mode, NSRect)] = []
+    /// Status word and the concrete step under it — the "Spelunking… /
+    /// Running the test suite" pairing from the design.
+    private(set) var activeWord: String = ""
+    private(set) var activeCaption: String = ""
+    /// 0→1 after the panel opens. Drives the staggered arrival so the roster
+    /// assembles rather than snapping into place.
+    private var appear: CGFloat = 0
+    private var appearTimer: Timer?
     private(set) var entries: [Entry] = []
     private(set) var activeIndex = 0
     private var expanded = false
@@ -95,9 +123,40 @@ final class NotchShelfView: NSView {
         needsDisplay = true
     }
 
+    func update(word: String, caption: String) {
+        activeWord = word
+        activeCaption = caption
+        needsDisplay = true
+    }
+
+    /// Replays whenever the panel opens or the mode changes, so content
+    /// arrives in sequence instead of all at once.
+    private func restartAppear() {
+        appearTimer?.invalidate()
+        appear = 0
+        let start = CACurrentMediaTime()
+        appearTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60.0, repeats: true) { [weak self] t in
+            guard let self = self else { return t.invalidate() }
+            let p = min(1, CGFloat((CACurrentMediaTime() - start) / 0.42))
+            // Ease out: fast to begin, settling softly, which is what makes a
+            // spring read as physical rather than linear.
+            self.appear = 1 - pow(1 - p, 3)
+            if p >= 1 { t.invalidate() }
+            self.needsDisplay = true
+        }
+        if let appearTimer { RunLoop.main.add(appearTimer, forMode: .common) }
+    }
+
+    /// 0→1 for the n-th item, offset so each lands 40ms after the one before.
+    private func stagger(_ index: Int) -> CGFloat {
+        let offset = CGFloat(index) * 0.13
+        return max(0, min(1, (appear - offset) / max(0.0001, 1 - offset)))
+    }
+
     func setMode(_ newMode: Mode) {
         guard newMode != mode else { return }
         mode = newMode
+        restartAppear()
         needsDisplay = true
         onModeChanged?(newMode)
     }
@@ -108,7 +167,9 @@ final class NotchShelfView: NSView {
             return
         }
         let point = convert(event.locationInWindow, from: nil)
-        if let hit = railHits.first(where: { $0.1.contains(point) }) {
+        // Generous vertical slop: the pills are 24pt tall and people aim at
+        // the word, not the capsule.
+        if let hit = railFrames().first(where: { $0.1.insetBy(dx: -2, dy: -8).contains(point) }) {
             setMode(hit.0)
             return
         }
@@ -126,6 +187,7 @@ final class NotchShelfView: NSView {
         targetShelf = shelf
         if currentShelf == .zero { currentShelf = shelf }
         startSizeAnimation()
+        if value == .expanded { restartAppear() } else { appear = 1 }
         needsDisplay = true
     }
 
@@ -157,7 +219,7 @@ final class NotchShelfView: NSView {
     /// clicks across the whole top of the screen.
     override func hitTest(_ point: NSPoint) -> NSView? {
         let local = convert(point, from: superview)
-        return shelfRect.contains(local) ? self : nil
+        return settledRect.contains(local) ? self : nil
     }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -201,10 +263,10 @@ final class NotchShelfView: NSView {
 
     private func text(_ string: String, _ size: CGFloat, _ weight: NSFont.Weight,
                       _ colour: NSColor, at origin: NSPoint, maxWidth: CGFloat = .greatestFiniteMagnitude,
-                      rightAligned: Bool = false) {
+                      rightAligned: Bool = false, centred: Bool = false) {
         let style = NSMutableParagraphStyle()
         style.lineBreakMode = .byTruncatingTail
-        style.alignment = rightAligned ? .right : .left
+        style.alignment = centred ? .center : (rightAligned ? .right : .left)
         let attrs: [NSAttributedString.Key: Any] = [
             .font: NSFont.systemFont(ofSize: size, weight: weight),
             .foregroundColor: colour,
@@ -215,29 +277,55 @@ final class NotchShelfView: NSView {
         NSAttributedString(string: string, attributes: attrs).draw(in: rect)
     }
 
+    /// The dark elevated card the design puts every body on. Without it the
+    /// content floats on bare black and the panel reads as a void.
+    private func card(_ rect: NSRect, alpha: CGFloat = 1) {
+        guard rect.width > 2, rect.height > 2 else { return }
+        NSColor(white: 0.078, alpha: alpha).setFill()
+        NSBezierPath(roundedRect: rect, xRadius: 22, yRadius: 22).fill()
+    }
+
+    /// Soft bloom behind a pet — the only light source in the composition.
+    private func glow(_ centre: NSPoint, radius: CGFloat, colour: NSColor, alpha: CGFloat) {
+        guard alpha > 0.01, let ctx = NSGraphicsContext.current?.cgContext else { return }
+        let colours = [colour.withAlphaComponent(0.30 * alpha).cgColor,
+                       colour.withAlphaComponent(0).cgColor] as CFArray
+        guard let g = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(),
+                                 colors: colours, locations: [0, 1]) else { return }
+        ctx.saveGState()
+        ctx.drawRadialGradient(g, startCenter: centre, startRadius: 0,
+                               endCenter: centre, endRadius: radius,
+                               options: .drawsAfterEndLocation)
+        ctx.restoreGState()
+    }
+
     // MARK: the mode rail
 
     private func drawRail() {
-        railHits.removeAll()
-        var x = shelfRect.minX + 18
-        let y = shelfRect.maxY - 34
-        for m in Mode.allCases {
-            let label = m.title
-            let w = label.size(withAttributes: [.font: NSFont.systemFont(ofSize: 12, weight: .semibold)]).width + 26
-            let pill = NSRect(x: x, y: y, width: w, height: 24)
+        let frames = railFrames()
+        // The rail sits on its own recessed track, as in the design — without
+        // it the segments float and the active pill has nothing to sit in.
+        if let first = frames.first, let last = frames.last {
+            let track = NSRect(x: first.1.minX - 3, y: first.1.minY - 3,
+                               width: last.1.maxX - first.1.minX + 6,
+                               height: first.1.height + 6)
+            NSColor(white: 0.07, alpha: 1).setFill()
+            NSBezierPath(roundedRect: track, xRadius: track.height / 2,
+                         yRadius: track.height / 2).fill()
+        }
+        for (m, pill) in frames {
             if m == mode {
-                NSColor(white: 0.15, alpha: 1).setFill()
+                NSColor(white: 0.16, alpha: 1).setFill()
                 NSBezierPath(roundedRect: pill, xRadius: 12, yRadius: 12).fill()
             }
-            text(label, 12, m == mode ? .semibold : .medium,
+            text(m.title, 12, m == mode ? .semibold : .medium,
                  m == mode ? .white : NSColor(white: 0.56, alpha: 1),
-                 at: NSPoint(x: pill.minX + 13, y: pill.maxY - 5))
-            railHits.append((m, pill))
-            x += w + 4
+                 at: NSPoint(x: pill.minX + 14, y: pill.maxY - 5))
         }
         if !summary.isEmpty {
-            text(summary, 11, .regular, NSColor(white: 0.56, alpha: 1),
-                 at: NSPoint(x: shelfRect.maxX - 260, y: y + 19), maxWidth: 242, rightAligned: true)
+            text(summary, 11, .regular, NSColor(white: 0.52, alpha: 1),
+                 at: NSPoint(x: settledRect.maxX - 280, y: settledRect.maxY - 15),
+                 maxWidth: 262, rightAligned: true)
         }
     }
 
@@ -339,12 +427,36 @@ final class NotchShelfView: NSView {
     }
 
     private func drawExpanded(_ ctx: CGGraphicsContextAlias) {
+        let b = settledRect
+        let body = NSRect(x: b.minX + 14, y: b.minY + 12,
+                          width: b.width - 28, height: b.height - 58)
+        card(body, alpha: appear)
+
         let frames = slotFrames()
         for (i, rect) in frames.enumerated() where rect != .zero {
             let distance = abs(i - activeIndex)
-            let alpha: CGFloat = distance == 0 ? 1.0 : (distance == 1 ? 0.55 : 0.38)
-            draw(entries[i], in: rect, lit: distance == 0, alpha: alpha, ctx: ctx)
+            let t = stagger(distance)
+            guard t > 0.01 else { continue }
+            let base: CGFloat = distance == 0 ? 1.0 : (distance == 1 ? 0.55 : 0.36)
+            // Arrive from slightly below as well as fading, so the row
+            // assembles rather than appearing.
+            let lifted = rect.offsetBy(dx: 0, dy: (1 - t) * -10)
+            if distance == 0 {
+                glow(NSPoint(x: lifted.midX, y: lifted.midY),
+                     radius: lifted.width * 1.3, colour: entries[i].tint, alpha: t)
+            }
+            draw(entries[i], in: lifted, lit: distance == 0, alpha: base * t, ctx: ctx)
         }
+
+        // The status pairing: whimsical word large, the real work beneath it.
+        guard !activeWord.isEmpty || !activeCaption.isEmpty else { return }
+        let t = stagger(3)
+        guard t > 0.01 else { return }
+        let textY = body.minY + 46
+        text(activeWord, 20, .semibold, NSColor(white: 1, alpha: t),
+             at: NSPoint(x: body.minX, y: textY), maxWidth: body.width, centred: true)
+        text(activeCaption, 12, .regular, NSColor(white: 0.56, alpha: t),
+             at: NSPoint(x: body.minX, y: textY - 22), maxWidth: body.width, centred: true)
     }
 
     // MARK: the activity feed
@@ -353,65 +465,95 @@ final class NotchShelfView: NSView {
         guard !rows.isEmpty else {
             text("No turns yet — send a pet a message.", 13, .regular,
                  NSColor(white: 0.56, alpha: 1),
-                 at: NSPoint(x: shelfRect.minX + 20, y: shelfRect.maxY - 80))
+                 at: NSPoint(x: settledRect.minX + 30, y: settledRect.maxY - 80))
             return
         }
-        let rowHeight: CGFloat = 46
-        var y = shelfRect.maxY - 56
-        for row in rows.prefix(max(0, Int((y - shelfRect.minY - 12) / rowHeight))) {
-            draw(row, topY: y, height: rowHeight)
+        let b = settledRect
+        let body = NSRect(x: b.minX + 14, y: b.minY + 12,
+                          width: b.width - 28, height: b.height - 58)
+        card(body, alpha: appear)
+
+        let rowHeight: CGFloat = 44
+        var y = body.maxY - 6
+        let fits = max(0, Int((y - body.minY - 4) / rowHeight))
+        for (i, row) in rows.prefix(fits).enumerated() {
+            let t = stagger(i)
+            if t > 0.01 { draw(row, topY: y + (1 - t) * -8, height: rowHeight, alpha: t, body: body) }
             y -= rowHeight
         }
     }
 
-    private func draw(_ row: ActivityRow, topY: CGFloat, height: CGFloat) {
+    private func draw(_ row: ActivityRow, topY: CGFloat, height: CGFloat,
+                      alpha: CGFloat, body: NSRect) {
         let midY = topY - height / 2
-        let avatar = NSRect(x: shelfRect.minX + 20, y: midY - 13, width: 26, height: 26)
+        let avatar = NSRect(x: body.minX + 16, y: midY - 13, width: 26, height: 26)
 
+        // A live row carries its arc and a faint bloom; a settled one is
+        // completely still, so a quiet row reads as finished without being read.
+        if row.state == .live {
+            glow(NSPoint(x: avatar.midX, y: avatar.midY), radius: 26,
+                 colour: row.tint, alpha: alpha)
+        }
         if let image = row.image {
             image.draw(in: Self.aspectFit(image.size, in: avatar), from: .zero,
                        operation: .sourceOver,
-                       fraction: row.state == .live ? 1.0 : 0.72,
+                       fraction: (row.state == .live ? 1.0 : 0.72) * alpha,
                        respectFlipped: true, hints: nil)
         } else {
-            row.tint.withAlphaComponent(row.state == .live ? 1.0 : 0.7).setFill()
+            row.tint.withAlphaComponent((row.state == .live ? 1.0 : 0.7) * alpha).setFill()
             NSBezierPath(ovalIn: avatar).fill()
         }
-
-        // A live row keeps its arc; a settled one is completely still, so a
-        // quiet row reads as finished without being read.
         if row.state == .live {
-            let d = avatar.width + 12
-            let c = NSPoint(x: avatar.midX, y: avatar.midY)
             let arc = NSBezierPath()
-            arc.appendArc(withCenter: c, radius: d / 2, startAngle: 40, endAngle: 300)
+            arc.appendArc(withCenter: NSPoint(x: avatar.midX, y: avatar.midY),
+                          radius: avatar.width / 2 + 6, startAngle: 40, endAngle: 300)
             arc.lineWidth = 2
             arc.lineCapStyle = .round
-            row.tint.withAlphaComponent(0.95).setStroke()
+            row.tint.withAlphaComponent(0.95 * alpha).setStroke()
             arc.stroke()
         }
 
-        text("\(row.name) · \(row.provider)", 11, .regular,
-             NSColor(white: 0.56, alpha: 1),
-             at: NSPoint(x: shelfRect.minX + 62, y: topY - 10), maxWidth: 300)
+        let textX = body.minX + 58
+        text("\(row.name) · \(row.provider)", 10.5, .regular,
+             NSColor(white: 0.5, alpha: alpha),
+             at: NSPoint(x: textX, y: topY - 9), maxWidth: 260)
         text(row.activity, 13, row.state == .live ? .semibold : .regular,
-             row.state == .live ? .white : NSColor(white: 0.79, alpha: 1),
-             at: NSPoint(x: shelfRect.minX + 62, y: topY - 26),
-             maxWidth: shelfRect.width - 300)
+             NSColor(white: row.state == .live ? 1 : 0.78, alpha: alpha),
+             at: NSPoint(x: textX, y: topY - 25), maxWidth: body.width - 330)
+
+        var rightEdge = body.maxX - 16
+        text(row.trailing, 10.5, .regular, NSColor(white: 0.5, alpha: alpha),
+             at: NSPoint(x: rightEdge - 150, y: topY - 19), maxWidth: 150, rightAligned: true)
+        rightEdge -= 160
 
         if let remedy = row.remedy {
-            let w: CGFloat = 76
-            let pill = NSRect(x: shelfRect.maxX - 20 - 150 - w - 10, y: midY - 11,
-                              width: w, height: 22)
+            let w = remedy.size(withAttributes: [.font: NSFont.systemFont(ofSize: 11, weight: .semibold)]).width + 24
+            let pill = NSRect(x: rightEdge - w, y: midY - 11, width: w, height: 22)
             let path = NSBezierPath(roundedRect: pill, xRadius: 11, yRadius: 11)
             path.lineWidth = 1
-            NSColor(white: 0.32, alpha: 1).setStroke()
+            NSColor(white: 0.34, alpha: alpha).setStroke()
             path.stroke()
-            text(remedy, 11, .semibold, .white, at: NSPoint(x: pill.minX + 13, y: pill.maxY - 4))
+            text(remedy, 11, .semibold, NSColor(white: 1, alpha: alpha),
+                 at: NSPoint(x: pill.minX + 12, y: pill.maxY - 4))
+            rightEdge -= w + 10
         }
 
-        text(row.trailing, 11, .regular, NSColor(white: 0.56, alpha: 1),
-             at: NSPoint(x: shelfRect.maxX - 170, y: topY - 20), maxWidth: 150, rightAligned: true)
+        // Status chip in the row's own hue — fill, border and label all one
+        // colour, as the chips in the design do.
+        if row.state != .live {
+            let label = row.state == .done ? "done"
+                      : (row.state == .failed ? "failed" : "interrupted")
+            let w = label.size(withAttributes: [.font: NSFont.systemFont(ofSize: 10.5, weight: .semibold)]).width + 20
+            let chip = NSRect(x: rightEdge - w, y: midY - 9, width: w, height: 18)
+            row.tint.withAlphaComponent(0.13 * alpha).setFill()
+            let path = NSBezierPath(roundedRect: chip, xRadius: 9, yRadius: 9)
+            path.fill()
+            path.lineWidth = 1
+            row.tint.withAlphaComponent(0.34 * alpha).setStroke()
+            path.stroke()
+            text(label, 10.5, .semibold, row.tint.withAlphaComponent(alpha),
+                 at: NSPoint(x: chip.minX + 10, y: chip.maxY - 3))
+        }
     }
 
     // MARK: drawing one pet
