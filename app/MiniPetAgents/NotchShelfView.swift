@@ -294,7 +294,8 @@ final class NotchShelfView: NSView {
         var frames = [NSRect](repeating: .zero, count: entries.count)
         guard !entries.isEmpty else { return frames }
         let active: CGFloat = 74, neighbour: CGFloat = 46, gap: CGFloat = 20
-        let baseline = shelfRect.minY + 52
+        // Sit the row in the panel's own vertical middle, below the rail.
+        let baseline = shelfRect.minY + (shelfRect.height - 34) / 2
         frames[activeIndex] = NSRect(x: shelfRect.midX - active / 2, y: baseline - active / 2,
                                      width: active, height: active)
         var x = shelfRect.midX - active / 2 - gap
@@ -314,42 +315,35 @@ final class NotchShelfView: NSView {
             frames[i] = NSRect(x: x, y: baseline - s / 2, width: s, height: s)
             x += s + gap
         }
+        // Centre the group that actually exists. With the active pet at either
+        // end of the roster there are no neighbours on one side, and centring
+        // only the active pet leaves the row visibly lopsided.
+        let used = frames.filter { $0 != .zero }
+        if let minX = used.map({ $0.minX }).min(), let maxX = used.map({ $0.maxX }).max() {
+            let shift = shelfRect.midX - (minX + maxX) / 2
+            if abs(shift) > 0.5 {
+                for i in frames.indices where frames[i] != .zero {
+                    frames[i] = frames[i].offsetBy(dx: shift, dy: 0)
+                }
+            }
+        }
         return frames
     }
 
+    /// Largest rect of `size`'s aspect ratio that fits inside `bounds`.
+    static func aspectFit(_ size: NSSize, in bounds: NSRect) -> NSRect {
+        guard size.width > 0, size.height > 0 else { return bounds }
+        let scale = min(bounds.width / size.width, bounds.height / size.height)
+        let w = size.width * scale, h = size.height * scale
+        return NSRect(x: bounds.midX - w / 2, y: bounds.midY - h / 2, width: w, height: h)
+    }
+
     private func drawExpanded(_ ctx: CGGraphicsContextAlias) {
-        let b = shelfRect
-        let active: CGFloat = 74
-        let neighbour: CGFloat = 46
-        let gap: CGFloat = 20
-        let baseline = b.minY + 52
-
-        // Lay the row out from the centre so the active pet is always centred
-        // and the others fall away either side.
-        var slots: [(Entry, CGFloat, CGFloat, CGFloat)] = []   // entry, size, x, alpha
-        slots.append((entries[activeIndex], active, b.midX - active / 2, 1.0))
-
-        var x = b.midX - active / 2 - gap
-        for offset in 1...2 {
-            let i = activeIndex - offset
-            guard i >= 0 else { break }
-            let s = neighbour - CGFloat(offset - 1) * 10
-            x -= s
-            slots.append((entries[i], s, x, offset == 1 ? 0.55 : 0.38))
-            x -= gap
-        }
-        x = b.midX + active / 2 + gap
-        for offset in 1...2 {
-            let i = activeIndex + offset
-            guard i < entries.count else { break }
-            let s = neighbour - CGFloat(offset - 1) * 10
-            slots.append((entries[i], s, x, offset == 1 ? 0.55 : 0.38))
-            x += s + gap
-        }
-
-        for (entry, size, x, alpha) in slots {
-            let rect = NSRect(x: x, y: baseline - size / 2, width: size, height: size)
-            draw(entry, in: rect, lit: alpha == 1.0, alpha: alpha, ctx: ctx)
+        let frames = slotFrames()
+        for (i, rect) in frames.enumerated() where rect != .zero {
+            let distance = abs(i - activeIndex)
+            let alpha: CGFloat = distance == 0 ? 1.0 : (distance == 1 ? 0.55 : 0.38)
+            draw(entries[i], in: rect, lit: distance == 0, alpha: alpha, ctx: ctx)
         }
     }
 
@@ -358,7 +352,8 @@ final class NotchShelfView: NSView {
     private func drawActivity() {
         guard !rows.isEmpty else {
             text("No turns yet — send a pet a message.", 13, .regular,
-                 NSColor(white: 0.56, alpha: 1), at: NSPoint(x: shelfRect.minX + 20, y: shelfRect.maxY - 80))
+                 NSColor(white: 0.56, alpha: 1),
+                 at: NSPoint(x: shelfRect.minX + 20, y: shelfRect.maxY - 80))
             return
         }
         let rowHeight: CGFloat = 46
@@ -374,36 +369,43 @@ final class NotchShelfView: NSView {
         let avatar = NSRect(x: shelfRect.minX + 20, y: midY - 13, width: 26, height: 26)
 
         if let image = row.image {
-            image.draw(in: avatar, from: .zero, operation: .sourceOver,
-                       fraction: row.state == .live ? 1.0 : 0.72, respectFlipped: true, hints: nil)
+            image.draw(in: Self.aspectFit(image.size, in: avatar), from: .zero,
+                       operation: .sourceOver,
+                       fraction: row.state == .live ? 1.0 : 0.72,
+                       respectFlipped: true, hints: nil)
         } else {
             row.tint.withAlphaComponent(row.state == .live ? 1.0 : 0.7).setFill()
             NSBezierPath(ovalIn: avatar).fill()
         }
 
-        // A live row keeps its ring turning; a settled one is completely
-        // still, so a quiet row reads as finished without being read.
+        // A live row keeps its arc; a settled one is completely still, so a
+        // quiet row reads as finished without being read.
         if row.state == .live {
-            let ring = avatar.insetBy(dx: -6, dy: -6)
-            let path = NSBezierPath(ovalIn: ring)
-            path.lineWidth = 2
-            path.setLineDash([ring.width * 0.8, ring.width * 2.3], count: 2, phase: 0)
-            row.tint.withAlphaComponent(0.9).setStroke()
-            path.stroke()
+            let d = avatar.width + 12
+            let c = NSPoint(x: avatar.midX, y: avatar.midY)
+            let arc = NSBezierPath()
+            arc.appendArc(withCenter: c, radius: d / 2, startAngle: 40, endAngle: 300)
+            arc.lineWidth = 2
+            arc.lineCapStyle = .round
+            row.tint.withAlphaComponent(0.95).setStroke()
+            arc.stroke()
         }
 
         text("\(row.name) · \(row.provider)", 11, .regular,
-             NSColor(white: 0.56, alpha: 1), at: NSPoint(x: shelfRect.minX + 60, y: topY - 10), maxWidth: 300)
+             NSColor(white: 0.56, alpha: 1),
+             at: NSPoint(x: shelfRect.minX + 62, y: topY - 10), maxWidth: 300)
         text(row.activity, 13, row.state == .live ? .semibold : .regular,
              row.state == .live ? .white : NSColor(white: 0.79, alpha: 1),
-             at: NSPoint(x: shelfRect.minX + 60, y: topY - 26), maxWidth: shelfRect.width - 300)
+             at: NSPoint(x: shelfRect.minX + 62, y: topY - 26),
+             maxWidth: shelfRect.width - 300)
 
         if let remedy = row.remedy {
             let w: CGFloat = 76
-            let pill = NSRect(x: shelfRect.maxX - 20 - 150 - w - 10, y: midY - 11, width: w, height: 22)
-            NSColor(white: 0.18, alpha: 1).setStroke()
+            let pill = NSRect(x: shelfRect.maxX - 20 - 150 - w - 10, y: midY - 11,
+                              width: w, height: 22)
             let path = NSBezierPath(roundedRect: pill, xRadius: 11, yRadius: 11)
             path.lineWidth = 1
+            NSColor(white: 0.32, alpha: 1).setStroke()
             path.stroke()
             text(remedy, 11, .semibold, .white, at: NSPoint(x: pill.minX + 13, y: pill.maxY - 4))
         }
@@ -425,20 +427,32 @@ final class NotchShelfView: NSView {
             NSBezierPath(ovalIn: rect.insetBy(dx: rect.width * 0.2, dy: rect.height * 0.2)).fill()
             ctx.restoreGState()
         }
-        entry.image.draw(in: rect, from: .zero, operation: .sourceOver,
+        // Sprite frames are taller than they are wide; drawing them into a
+        // square stretches the pet. Fit, don't fill.
+        entry.image.draw(in: Self.aspectFit(entry.image.size, in: rect),
+                         from: .zero, operation: .sourceOver,
                          fraction: alpha, respectFlipped: true, hints: nil)
 
         // Status ring: a gap in the stroke while the agent is working, a
         // closed quiet ring otherwise. Motion carries state; identity does not.
         guard lit else { return }
-        let ring = rect.insetBy(dx: -7, dy: -7)
-        let path = NSBezierPath(ovalIn: ring)
-        path.lineWidth = 2
-        entry.tint.withAlphaComponent(entry.isBusy ? 0.9 : 0.28).setStroke()
+        let d = max(rect.width, rect.height) + 14
+        let ring = NSRect(x: rect.midX - d / 2, y: rect.midY - d / 2, width: d, height: d)
+        // Quiet full ring when idle; a long arc with one gap while working, so
+        // it reads as a ring that is turning rather than a stray crescent.
+        let quiet = NSBezierPath(ovalIn: ring)
+        quiet.lineWidth = 2
+        entry.tint.withAlphaComponent(entry.isBusy ? 0.16 : 0.3).setStroke()
+        quiet.stroke()
         if entry.isBusy {
-            path.setLineDash([ring.width * 0.8, ring.width * 2.3], count: 2, phase: 0)
+            let arc = NSBezierPath()
+            arc.appendArc(withCenter: NSPoint(x: ring.midX, y: ring.midY),
+                          radius: d / 2, startAngle: 40, endAngle: 300)
+            arc.lineWidth = 2
+            arc.lineCapStyle = .round
+            entry.tint.withAlphaComponent(0.95).setStroke()
+            arc.stroke()
         }
-        path.stroke()
     }
 }
 

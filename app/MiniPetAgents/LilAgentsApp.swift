@@ -263,6 +263,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         menu.addItem(NSMenuItem.separator())
 
+        // Fills the notch with seeded content so the whole surface can be
+        // looked at without four agents actually being mid-turn. It never
+        // touches the activity store, so nothing demo reaches real history.
+        let demoItem = NSMenuItem(title: "Notch demo data",
+                                  action: #selector(toggleNotchDemo),
+                                  keyEquivalent: "")
+        demoItem.target = self
+        demoItem.state = NotchDemoData.isEnabled ? .on : .off
+        menu.addItem(demoItem)
+
+        menu.addItem(NSMenuItem.separator())
+
         let galleryItem = NSMenuItem(title: "Pet Gallery…",
                                      action: #selector(showGallery),
                                      keyEquivalent: "g")
@@ -533,6 +545,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         pet.model = nil
         restartPetSession(slug: slug)
         rebuildMenuBar()
+    }
+
+    @objc func toggleNotchDemo(_ sender: NSMenuItem) {
+        NotchDemoData.isEnabled.toggle()
+        sender.state = NotchDemoData.isEnabled ? .on : .off
+        controller?.notch?.refresh()
     }
 
     @objc func showGallery() {

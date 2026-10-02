@@ -1,0 +1,86 @@
+import AppKit
+
+/// Seeded content for the notch, so the whole surface can be experienced
+/// without waiting for four agents to actually be mid-turn.
+///
+/// Two rules this deliberately follows:
+///
+/// 1. It never touches `ActivityStore`. Demo rows are built here and handed
+///    straight to the view, so nothing fabricated can reach the persisted
+///    history on disk and be mistaken for a real record later.
+/// 2. The pets are the user's own installed packs, drawn from their real
+///    sprite sheets. Only the agent activity is invented, and the panel says
+///    so while demo mode is on.
+enum NotchDemoData {
+
+    private static let key = "app.notchDemoMode"
+
+    static var isEnabled: Bool {
+        get { UserDefaults.standard.bool(forKey: key) }
+        set { UserDefaults.standard.set(newValue, forKey: key) }
+    }
+
+    /// Status hues, in the same vocabulary the live shelf uses.
+    private static let calm   = NSColor(srgbRed: 0.81, green: 0.89, blue: 0.96, alpha: 1)
+    private static let good   = NSColor(srgbRed: 0.18, green: 0.84, blue: 0.66, alpha: 1)
+    private static let wait   = NSColor(srgbRed: 1.00, green: 0.70, blue: 0.14, alpha: 1)
+    private static let review = NSColor(srgbRed: 0.61, green: 0.42, blue: 1.00, alpha: 1)
+    private static let bad    = NSColor(srgbRed: 1.00, green: 0.23, blue: 0.36, alpha: 1)
+
+    /// One roster entry per installed pet, cycling through the status colours
+    /// so every state is visible at once.
+    static func entries() -> [NotchShelfView.Entry] {
+        let tints: [NSColor] = [calm, good, wait, review, bad]
+        let busy = [true, true, false, false, false]
+        var out: [NotchShelfView.Entry] = []
+        for (i, pet) in PetLibrary.shared.pets.prefix(5).enumerated() {
+            guard let pack = pet.loadPack() else { continue }
+            // A walking frame reads better than idle at roster size.
+            let frames = pack.frames[.runRight] ?? pack.frames[.idle] ?? []
+            guard let image = frames.first else { continue }
+            out.append(NotchShelfView.Entry(slug: pet.slug,
+                                            image: image,
+                                            tint: tints[i % tints.count],
+                                            isBusy: busy[i % busy.count]))
+        }
+        return out
+    }
+
+    /// A feed covering every row state the real one can produce: two turns in
+    /// flight, two finished, one failed with its remedy, one interrupted.
+    static func rows() -> [NotchShelfView.ActivityRow] {
+        let names = PetLibrary.shared.pets.map { $0.slug }
+        func name(_ i: Int) -> String { i < names.count ? names[i] : "pet \(i + 1)" }
+        let images = entries().map { $0.image }
+        func image(_ i: Int) -> NSImage? { i < images.count ? images[i] : nil }
+
+        return [
+            .init(name: name(0), provider: "Claude",
+                  activity: "Spelunking · running the test suite",
+                  state: .live, trailing: "14s · 2.1k", remedy: nil,
+                  tint: calm, image: image(0)),
+            .init(name: name(1), provider: "Codex",
+                  activity: "Percolating · reading the diff",
+                  state: .live, trailing: "9s · 840", remedy: nil,
+                  tint: good, image: image(1)),
+            .init(name: name(2), provider: "Cursor",
+                  activity: "Bash · npm run build",
+                  state: .done, trailing: "1m 12s · 8.4k · $0.11", remedy: nil,
+                  tint: good, image: image(2)),
+            .init(name: name(3), provider: "Copilot",
+                  activity: "Not signed in to Copilot",
+                  state: .failed, trailing: "—", remedy: "Sign in",
+                  tint: bad, image: image(3)),
+            .init(name: name(4), provider: "Claude",
+                  activity: "Replied",
+                  state: .done, trailing: "3m 04s · 22k · $0.28", remedy: nil,
+                  tint: good, image: image(4)),
+            .init(name: name(0), provider: "Codex",
+                  activity: "Interrupted — the app quit mid-turn",
+                  state: .interrupted, trailing: "41s", remedy: nil,
+                  tint: NSColor(white: 0.55, alpha: 1), image: image(0)),
+        ]
+    }
+
+    static let summary = "demo data · 6 turns · 33k · $0.39"
+}

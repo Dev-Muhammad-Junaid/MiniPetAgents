@@ -254,7 +254,17 @@ final class NotchCommandCentre {
 
     /// Push the current roster into the shelf. Cheap enough to call per tick.
     func refresh() {
-        guard let controller = controller, let view = hostView else { return }
+        guard let view = hostView else { return }
+
+        // Demo mode short-circuits before touching the live roster or the
+        // activity store, so nothing seeded can leak into real state.
+        if NotchDemoData.isEnabled {
+            view.update(entries: NotchDemoData.entries())
+            view.update(rows: NotchDemoData.rows(), summary: NotchDemoData.summary)
+            return
+        }
+
+        guard let controller = controller else { return }
         let pets: [NotchShelfView.Entry] = controller.characters.compactMap { pet in
             guard let frameImage = pet.currentSpriteFrame() else { return nil }
             return NotchShelfView.Entry(slug: pet.petSlug,
