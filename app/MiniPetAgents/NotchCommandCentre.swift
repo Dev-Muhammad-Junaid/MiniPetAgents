@@ -104,6 +104,22 @@ final class NotchCommandCentre {
     /// and should stay out of the way.
     var isPassive: Bool { stage == .collapsed }
 
+    /// The physical notch, in the shelf window's own coordinates.
+    ///
+    /// This region is not a display area: nothing drawn inside it is rendered.
+    /// Anything the user needs to see has to sit on the strips either side,
+    /// which is why centred content in the peek state was invisible — it was
+    /// behind the hardware.
+    static func cutoutInWindow(screen: NSScreen, window: NSRect) -> NSRect? {
+        guard let left = screen.auxiliaryTopLeftArea,
+              let right = screen.auxiliaryTopRightArea,
+              right.minX > left.maxX else { return nil }
+        return NSRect(x: left.maxX - window.minX,
+                      y: window.height - screen.safeAreaInsets.top,
+                      width: right.minX - left.maxX,
+                      height: screen.safeAreaInsets.top)
+    }
+
     /// Collapsed width: the cut-out plus a strip either side.
     ///
     /// Exactly the cut-out would be invisible — that region is not a display
@@ -164,6 +180,7 @@ final class NotchCommandCentre {
         if window == nil { build(on: screen) }
         guard let window = window else { return }
         window.setFrame(windowFrame(on: screen), display: true)
+        hostView?.cutout = Self.cutoutInWindow(screen: screen, window: window.frame)
         hostView?.setStage(stage, shelf: shelfSize(on: screen, stage: stage))
         window.orderFrontRegardless()
         refresh()

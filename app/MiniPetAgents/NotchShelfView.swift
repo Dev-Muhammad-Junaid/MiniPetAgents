@@ -76,6 +76,10 @@ final class NotchShelfView: NSView {
     var onOpenPet: ((String) -> Void)?
     var onQuit: (() -> Void)?
     private var stage: NotchCommandCentre.Stage = .collapsed
+    /// The hardware notch in this view's coordinates, when there is one.
+    /// Nothing drawn inside it renders, so every layout that sits in the
+    /// menu-bar band has to work around it.
+    var cutout: NSRect?
     /// Size the shelf is drawn at right now, eased toward `targetShelf`.
     /// Animating the drawing instead of the window is what removed the hover
     /// flicker: the window never moves, so nothing can cross the pointer.
@@ -495,7 +499,8 @@ final class NotchShelfView: NSView {
         // moving is what tells you the app is alive; a dot only tells you it
         // is installed.
         let size = min(22, b.height - 8)
-        let petRect = NSRect(x: b.minX + 11, y: b.midY - size / 2, width: size, height: size)
+        let petX = cutout.map { max(b.minX + 6, $0.minX - 10 - size) } ?? (b.minX + 11)
+        let petRect = NSRect(x: petX, y: b.midY - size / 2, width: size, height: size)
         if let image = entry.frame(at: clock) {
             glow(NSPoint(x: petRect.midX, y: petRect.midY), radius: size * 0.95,
                  colour: entry.tint, alpha: entry.isBusy ? 0.55 : 0.22)
@@ -520,27 +525,28 @@ final class NotchShelfView: NSView {
         guard !entries.isEmpty else { return }
         let b = shelfRect
         let size: CGFloat = 20
-        let y = b.midY - size / 2
         let dot: CGFloat = 7
         let others = entries.enumerated().filter { $0.offset != activeIndex }.map { $0.element }
 
-        // At notch width there is only room for the active pet and a couple of
-        // dots. Lay them out from the centre and drop the dots entirely when
-        // they would not fit, rather than letting anything spill past the edge.
-        let dotsWidth = CGFloat(min(others.count, 3)) * (dot + 3)
-        let needed = size + 8 + dotsWidth
-        let showDots = needed <= b.width - 16
+        // Split around the hardware. The active pet takes the strip left of
+        // the cut-out and the status dots the strip to its right; centring
+        // them put everything behind the notch, where nothing renders.
+        let gap: CGFloat = 10
+        let leftEdge = cutout.map { $0.minX } ?? b.midX - size / 2
+        let rightEdge = cutout.map { $0.maxX } ?? b.midX + size / 2 + gap
 
-        var x = b.midX - (showDots ? needed : size) / 2
-        draw(entries[activeIndex], in: NSRect(x: x, y: y, width: size, height: size),
+        let petX = min(max(b.minX + 6, leftEdge - gap - size), b.maxX - size - 6)
+        draw(entries[activeIndex],
+             in: NSRect(x: petX, y: b.midY - size / 2, width: size, height: size),
              lit: true, ctx: ctx)
-        guard showDots else { return }
-        x += size + 8
-        for entry in others.prefix(3) {
-            entry.tint.setFill()
+
+        var x = rightEdge + gap
+        for entry in others.prefix(3) where x + dot <= b.maxX - 6 {
+            let pulse = entry.isBusy ? 0.55 + 0.45 * CGFloat(0.5 + 0.5 * sin(clock * 2.4)) : 0.55
+            entry.tint.withAlphaComponent(pulse).setFill()
             NSBezierPath(ovalIn: NSRect(x: x, y: b.midY - dot / 2,
                                         width: dot, height: dot)).fill()
-            x += dot + 3
+            x += dot + 5
         }
     }
 
