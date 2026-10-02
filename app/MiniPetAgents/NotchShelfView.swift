@@ -437,8 +437,11 @@ final class NotchShelfView: NSView {
         var frames = [NSRect](repeating: .zero, count: entries.count)
         guard !entries.isEmpty else { return frames }
         let active: CGFloat = 74, neighbour: CGFloat = 46, gap: CGFloat = 20
-        // Sit the row in the panel's own vertical middle, below the rail.
-        let baseline = shelfRect.minY + (shelfRect.height - 34) / 2
+        // The row sits in the upper two-thirds of the card; the status
+        // pairing owns the band underneath it. Overlapping them put the word
+        // straight through the pet's face.
+        let body = bodyRect()
+        let baseline = body.minY + body.height * 0.60
         frames[activeIndex] = NSRect(x: shelfRect.midX - active / 2, y: baseline - active / 2,
                                      width: active, height: active)
         var x = shelfRect.midX - active / 2 - gap
@@ -481,10 +484,15 @@ final class NotchShelfView: NSView {
         return NSRect(x: bounds.midX - w / 2, y: bounds.midY - h / 2, width: w, height: h)
     }
 
-    private func drawExpanded(_ ctx: CGGraphicsContextAlias) {
+    /// The elevated card every body sits on.
+    private func bodyRect() -> NSRect {
         let b = settledRect
-        let body = NSRect(x: b.minX + 14, y: b.minY + 12,
-                          width: b.width - 28, height: b.height - 58)
+        return NSRect(x: b.minX + 14, y: b.minY + 12,
+                      width: b.width - 28, height: b.height - 58)
+    }
+
+    private func drawExpanded(_ ctx: CGGraphicsContextAlias) {
+        let body = bodyRect()
         card(body, alpha: appear)
 
         let frames = slotFrames()
@@ -507,11 +515,14 @@ final class NotchShelfView: NSView {
         guard !activeWord.isEmpty || !activeCaption.isEmpty else { return }
         let t = stagger(3)
         guard t > 0.01 else { return }
-        let textY = body.minY + 46
-        text(activeWord, 20, .semibold, NSColor(white: 1, alpha: t),
+        // Rise into place as they fade, which is what makes the pairing land
+        // rather than appear.
+        let lift = (1 - t) * 8
+        let textY = body.minY + 52 - lift
+        text(activeWord, 21, .semibold, NSColor(white: 1, alpha: t),
              at: NSPoint(x: body.minX, y: textY), maxWidth: body.width, centred: true)
-        text(activeCaption, 12, .regular, NSColor(white: 0.56, alpha: t),
-             at: NSPoint(x: body.minX, y: textY - 22), maxWidth: body.width, centred: true)
+        text(activeCaption, 12, .regular, NSColor(white: 0.54, alpha: t),
+             at: NSPoint(x: body.minX, y: textY - 24), maxWidth: body.width, centred: true)
     }
 
     // MARK: the activity feed
@@ -523,9 +534,7 @@ final class NotchShelfView: NSView {
                  at: NSPoint(x: settledRect.minX + 30, y: settledRect.maxY - 80))
             return
         }
-        let b = settledRect
-        let body = NSRect(x: b.minX + 14, y: b.minY + 12,
-                          width: b.width - 28, height: b.height - 58)
+        let body = bodyRect()
         card(body, alpha: appear)
 
         let rowHeight: CGFloat = 44
