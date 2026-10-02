@@ -43,6 +43,20 @@ final class NotchShelfView: NSView {
     /// A click anywhere that isn't a control — this is what opens the panel.
     var onActivate: (() -> Void)?
     private var stage: NotchCommandCentre.Stage = .collapsed
+    /// Size the shelf is drawn at right now, eased toward `targetShelf`.
+    /// Animating the drawing instead of the window is what removed the hover
+    /// flicker: the window never moves, so nothing can cross the pointer.
+    private var currentShelf: NSSize = .zero
+    private var targetShelf: NSSize = .zero
+    private var sizeAnimation: Timer?
+
+    /// The drawn shelf, in view coordinates: centred horizontally, anchored to
+    /// the top edge so it always meets the screen edge.
+    var shelfRect: NSRect {
+        NSRect(x: (bounds.width - currentShelf.width) / 2,
+               y: bounds.maxY - currentShelf.height,
+               width: currentShelf.width, height: currentShelf.height)
+    }
     private(set) var mode: Mode = .pets
     private(set) var rows: [ActivityRow] = []
     private(set) var summary: String = ""
@@ -106,11 +120,44 @@ final class NotchShelfView: NSView {
         }
     }
 
-    func setStage(_ value: NotchCommandCentre.Stage, size: NSSize) {
+    func setStage(_ value: NotchCommandCentre.Stage, shelf: NSSize) {
         stage = value
         expanded = value == .expanded
-        setFrameSize(size)
+        targetShelf = shelf
+        if currentShelf == .zero { currentShelf = shelf }
+        startSizeAnimation()
         needsDisplay = true
+    }
+
+    /// Ease the drawn size toward the target. Growing overshoots a little so
+    /// the shelf reads as one piece of material stretching; shrinking does
+    /// not, because a shelf that bounces shut looks like a bug.
+    private func startSizeAnimation() {
+        sizeAnimation?.invalidate()
+        let growing = targetShelf.width > currentShelf.width
+        let rate: CGFloat = growing ? 0.26 : 0.34
+        sizeAnimation = Timer.scheduledTimer(withTimeInterval: 1.0 / 60.0, repeats: true) { [weak self] timer in
+            guard let self = self else { return timer.invalidate() }
+            let dw = self.targetShelf.width - self.currentShelf.width
+            let dh = self.targetShelf.height - self.currentShelf.height
+            if abs(dw) < 0.6 && abs(dh) < 0.6 {
+                self.currentShelf = self.targetShelf
+                timer.invalidate()
+            } else {
+                self.currentShelf.width += dw * rate
+                self.currentShelf.height += dh * rate
+            }
+            self.needsDisplay = true
+        }
+        if let sizeAnimation { RunLoop.main.add(sizeAnimation, forMode: .common) }
+    }
+
+    /// Only the drawn shelf takes the mouse. Everywhere else the window is
+    /// transparent and must stay click-through, or it would eat menu-bar
+    /// clicks across the whole top of the screen.
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        let local = convert(point, from: superview)
+        return shelfRect.contains(local) ? self : nil
     }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -119,8 +166,9 @@ final class NotchShelfView: NSView {
         // The slab. Square at the top so it meets the screen edge with no
         // seam; rounded only at the bottom, so it looks moulded rather than
         // like a window that happens to be up there.
-        let r: CGFloat = 26
-        let b = bounds
+        let b = shelfRect
+        guard b.width > 1, b.height > 1 else { return }
+        let r: CGFloat = min(26, b.height * 0.7)
         let path = CGMutablePath()
         path.move(to: CGPoint(x: b.minX, y: b.maxY))
         path.addLine(to: CGPoint(x: b.minX, y: b.minY + r))
@@ -163,7 +211,7 @@ final class NotchShelfView: NSView {
             .paragraphStyle: style,
         ]
         let rect = NSRect(x: origin.x, y: origin.y - size - 2,
-                          width: min(maxWidth, bounds.maxX - origin.x), height: size + 6)
+                          width: min(maxWidth, max(10, shelfRect.maxX - origin.x)), height: size + 6)
         NSAttributedString(string: string, attributes: attrs).draw(in: rect)
     }
 
@@ -171,8 +219,8 @@ final class NotchShelfView: NSView {
 
     private func drawRail() {
         railHits.removeAll()
-        var x = bounds.minX + 18
-        let y = bounds.maxY - 34
+        var x = shelfRect.minX + 18
+        let y = shelfRect.maxY - 34
         for m in Mode.allCases {
             let label = m.title
             let w = label.size(withAttributes: [.font: NSFont.systemFont(ofSize: 12, weight: .semibold)]).width + 26
@@ -189,7 +237,7 @@ final class NotchShelfView: NSView {
         }
         if !summary.isEmpty {
             text(summary, 11, .regular, NSColor(white: 0.56, alpha: 1),
-                 at: NSPoint(x: bounds.maxX - 260, y: y + 19), maxWidth: 242, rightAligned: true)
+                 at: NSPoint(x: shelfRect.maxX - 260, y: y + 19), maxWidth: 242, rightAligned: true)
         }
     }
 
@@ -202,18 +250,20 @@ final class NotchShelfView: NSView {
     /// display area, so anything drawn dead centre is simply not rendered —
     /// the dot has to land on the visible strip beside it.
     private func drawCollapsed() {
+        let b = shelfRect
         guard let entry = entries.indices.contains(activeIndex) ? entries[activeIndex] : entries.first
         else { return }
         let d: CGFloat = entry.isBusy ? 8 : 6
-        let rect = NSRect(x: bounds.minX + 14, y: bounds.midY - d / 2, width: d, height: d)
+        let rect = NSRect(x: b.minX + 14, y: b.midY - d / 2, width: d, height: d)
         entry.tint.withAlphaComponent(entry.isBusy ? 1.0 : 0.75).setFill()
         NSBezierPath(ovalIn: rect).fill()
     }
 
     private func drawResting(_ ctx: CGGraphicsContextAlias) {
         guard !entries.isEmpty else { return }
+        let b = shelfRect
         let size: CGFloat = 20
-        let y = bounds.midY - size / 2
+        let y = b.midY - size / 2
         let dot: CGFloat = 7
         let others = entries.enumerated().filter { $0.offset != activeIndex }.map { $0.element }
 
@@ -222,16 +272,16 @@ final class NotchShelfView: NSView {
         // they would not fit, rather than letting anything spill past the edge.
         let dotsWidth = CGFloat(min(others.count, 3)) * (dot + 3)
         let needed = size + 8 + dotsWidth
-        let showDots = needed <= bounds.width - 16
+        let showDots = needed <= b.width - 16
 
-        var x = bounds.midX - (showDots ? needed : size) / 2
+        var x = b.midX - (showDots ? needed : size) / 2
         draw(entries[activeIndex], in: NSRect(x: x, y: y, width: size, height: size),
              lit: true, ctx: ctx)
         guard showDots else { return }
         x += size + 8
         for entry in others.prefix(3) {
             entry.tint.setFill()
-            NSBezierPath(ovalIn: NSRect(x: x, y: bounds.midY - dot / 2,
+            NSBezierPath(ovalIn: NSRect(x: x, y: b.midY - dot / 2,
                                         width: dot, height: dot)).fill()
             x += dot + 3
         }
@@ -244,10 +294,10 @@ final class NotchShelfView: NSView {
         var frames = [NSRect](repeating: .zero, count: entries.count)
         guard !entries.isEmpty else { return frames }
         let active: CGFloat = 74, neighbour: CGFloat = 46, gap: CGFloat = 20
-        let baseline = bounds.minY + 52
-        frames[activeIndex] = NSRect(x: bounds.midX - active / 2, y: baseline - active / 2,
+        let baseline = shelfRect.minY + 52
+        frames[activeIndex] = NSRect(x: shelfRect.midX - active / 2, y: baseline - active / 2,
                                      width: active, height: active)
-        var x = bounds.midX - active / 2 - gap
+        var x = shelfRect.midX - active / 2 - gap
         for offset in 1...2 {
             let i = activeIndex - offset
             guard i >= 0 else { break }
@@ -256,7 +306,7 @@ final class NotchShelfView: NSView {
             frames[i] = NSRect(x: x, y: baseline - s / 2, width: s, height: s)
             x -= gap
         }
-        x = bounds.midX + active / 2 + gap
+        x = shelfRect.midX + active / 2 + gap
         for offset in 1...2 {
             let i = activeIndex + offset
             guard i < entries.count else { break }
@@ -268,17 +318,18 @@ final class NotchShelfView: NSView {
     }
 
     private func drawExpanded(_ ctx: CGGraphicsContextAlias) {
+        let b = shelfRect
         let active: CGFloat = 74
         let neighbour: CGFloat = 46
         let gap: CGFloat = 20
-        let baseline = bounds.minY + 52
+        let baseline = b.minY + 52
 
         // Lay the row out from the centre so the active pet is always centred
         // and the others fall away either side.
         var slots: [(Entry, CGFloat, CGFloat, CGFloat)] = []   // entry, size, x, alpha
-        slots.append((entries[activeIndex], active, bounds.midX - active / 2, 1.0))
+        slots.append((entries[activeIndex], active, b.midX - active / 2, 1.0))
 
-        var x = bounds.midX - active / 2 - gap
+        var x = b.midX - active / 2 - gap
         for offset in 1...2 {
             let i = activeIndex - offset
             guard i >= 0 else { break }
@@ -287,7 +338,7 @@ final class NotchShelfView: NSView {
             slots.append((entries[i], s, x, offset == 1 ? 0.55 : 0.38))
             x -= gap
         }
-        x = bounds.midX + active / 2 + gap
+        x = b.midX + active / 2 + gap
         for offset in 1...2 {
             let i = activeIndex + offset
             guard i < entries.count else { break }
@@ -307,12 +358,12 @@ final class NotchShelfView: NSView {
     private func drawActivity() {
         guard !rows.isEmpty else {
             text("No turns yet — send a pet a message.", 13, .regular,
-                 NSColor(white: 0.56, alpha: 1), at: NSPoint(x: 20, y: bounds.maxY - 80))
+                 NSColor(white: 0.56, alpha: 1), at: NSPoint(x: shelfRect.minX + 20, y: shelfRect.maxY - 80))
             return
         }
         let rowHeight: CGFloat = 46
-        var y = bounds.maxY - 56
-        for row in rows.prefix(Int((y - bounds.minY - 12) / rowHeight)) {
+        var y = shelfRect.maxY - 56
+        for row in rows.prefix(max(0, Int((y - shelfRect.minY - 12) / rowHeight))) {
             draw(row, topY: y, height: rowHeight)
             y -= rowHeight
         }
@@ -320,7 +371,7 @@ final class NotchShelfView: NSView {
 
     private func draw(_ row: ActivityRow, topY: CGFloat, height: CGFloat) {
         let midY = topY - height / 2
-        let avatar = NSRect(x: 20, y: midY - 13, width: 26, height: 26)
+        let avatar = NSRect(x: shelfRect.minX + 20, y: midY - 13, width: 26, height: 26)
 
         if let image = row.image {
             image.draw(in: avatar, from: .zero, operation: .sourceOver,
@@ -342,14 +393,14 @@ final class NotchShelfView: NSView {
         }
 
         text("\(row.name) · \(row.provider)", 11, .regular,
-             NSColor(white: 0.56, alpha: 1), at: NSPoint(x: 60, y: topY - 10), maxWidth: 300)
+             NSColor(white: 0.56, alpha: 1), at: NSPoint(x: shelfRect.minX + 60, y: topY - 10), maxWidth: 300)
         text(row.activity, 13, row.state == .live ? .semibold : .regular,
              row.state == .live ? .white : NSColor(white: 0.79, alpha: 1),
-             at: NSPoint(x: 60, y: topY - 26), maxWidth: bounds.width - 300)
+             at: NSPoint(x: shelfRect.minX + 60, y: topY - 26), maxWidth: shelfRect.width - 300)
 
         if let remedy = row.remedy {
             let w: CGFloat = 76
-            let pill = NSRect(x: bounds.maxX - 20 - 150 - w - 10, y: midY - 11, width: w, height: 22)
+            let pill = NSRect(x: shelfRect.maxX - 20 - 150 - w - 10, y: midY - 11, width: w, height: 22)
             NSColor(white: 0.18, alpha: 1).setStroke()
             let path = NSBezierPath(roundedRect: pill, xRadius: 11, yRadius: 11)
             path.lineWidth = 1
@@ -358,7 +409,7 @@ final class NotchShelfView: NSView {
         }
 
         text(row.trailing, 11, .regular, NSColor(white: 0.56, alpha: 1),
-             at: NSPoint(x: bounds.maxX - 170, y: topY - 20), maxWidth: 150, rightAligned: true)
+             at: NSPoint(x: shelfRect.maxX - 170, y: topY - 20), maxWidth: 150, rightAligned: true)
     }
 
     // MARK: drawing one pet

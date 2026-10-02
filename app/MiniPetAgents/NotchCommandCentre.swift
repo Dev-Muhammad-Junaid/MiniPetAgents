@@ -39,7 +39,12 @@ final class NotchCommandCentre {
     /// Hover has to be deliberate — without a delay the shelf flickers open
     /// every time the pointer crosses the top of the screen on its way
     /// somewhere else.
-    private static let hoverIntent: TimeInterval = 0.12
+    private static let hoverIntent: TimeInterval = 0.14
+    /// Grace period before collapsing — the fix for "it flickers and I can't
+    /// do anything with it".
+    private static let hoverExitGrace: TimeInterval = 0.45
+    /// How far outside the drawn shelf still counts as hovering it.
+    private static let hoverSlop: CGFloat = 10
     private static let cornerRadius: CGFloat = 26
 
     /// Three stages, escalating with intent.
@@ -57,6 +62,7 @@ final class NotchCommandCentre {
     private var window: NSWindow?
     private var hostView: NotchShelfView?
     private var hoverTimer: Timer?
+    private var pointerIsInside = false
 
     private var feedObserver: NSObjectProtocol?
 
@@ -89,6 +95,24 @@ final class NotchCommandCentre {
         return notch > 0 ? notch : restingFallbackWidth
     }
 
+    /// The window never changes size. Resizing it on hover was the flicker:
+    /// growing moved the window's edge past the pointer, which fired exit,
+    /// which collapsed it, which fired enter again — several times a second.
+    /// The window is now fixed at its largest and fully transparent outside
+    /// the drawn shelf; only the drawing changes between stages.
+    private func windowFrame(on screen: NSScreen) -> NSRect {
+        let w = Self.expandedWidth
+        let h = Self.expandedHeight(for: .activity)
+        return NSRect(x: screen.frame.midX - w / 2,
+                      y: screen.frame.maxY - h, width: w, height: h)
+    }
+
+    /// Size of the drawn shelf for a stage, in window coordinates.
+    func shelfSize(on screen: NSScreen, stage: Stage) -> NSSize {
+        let frame = self.frame(on: screen, stage: stage)
+        return frame.size
+    }
+
     private func frame(on screen: NSScreen, stage: Stage) -> NSRect {
         let notchH = Self.notchHeight(for: screen)
         let base = Self.restingWidth(on: screen)
@@ -117,7 +141,8 @@ final class NotchCommandCentre {
     func show(on screen: NSScreen) {
         if window == nil { build(on: screen) }
         guard let window = window else { return }
-        window.setFrame(frame(on: screen, stage: stage), display: true)
+        window.setFrame(windowFrame(on: screen), display: true)
+        hostView?.setStage(stage, shelf: shelfSize(on: screen, stage: stage))
         window.orderFrontRegardless()
         refresh()
     }
@@ -127,7 +152,7 @@ final class NotchCommandCentre {
     }
 
     private func build(on screen: NSScreen) {
-        let win = NSWindow(contentRect: frame(on: screen, stage: .collapsed),
+        let win = NSWindow(contentRect: windowFrame(on: screen),
                            styleMask: .borderless, backing: .buffered, defer: false)
         win.isOpaque = false
         win.backgroundColor = .clear
@@ -139,7 +164,6 @@ final class NotchCommandCentre {
         win.ignoresMouseEvents = false
 
         let view = NotchShelfView(frame: NSRect(origin: .zero, size: win.frame.size))
-        view.onHoverChanged = { [weak self] inside in self?.hoverChanged(inside) }
         view.onModeChanged = { [weak self] _ in self?.resizeForMode() }
         // A click is what opens the panel. Hover only ever peeks.
         view.onActivate = { [weak self] in
@@ -154,40 +178,65 @@ final class NotchCommandCentre {
 
     // MARK: Hover
 
-    private func hoverChanged(_ inside: Bool) {
+    /// Called from the controller tick with the live pointer position, rather
+    /// than from tracking areas. Tracking areas are tied to the view's
+    /// geometry, so every size change churned them; polling a rectangle is
+    /// immune to that and is free — the tick already runs at 60Hz.
+    func updateHover(pointer: NSPoint) {
+        guard let window = window, window.isVisible else { return }
+        let shelf = hoverZone()
+        // Generous margin: leaving by a pixel while reaching for a row
+        // shouldn't dismiss the panel.
+        let inside = shelf.insetBy(dx: -Self.hoverSlop, dy: -Self.hoverSlop).contains(pointer)
+        guard inside != pointerIsInside else { return }
+        pointerIsInside = inside
         hoverTimer?.invalidate()
+
         if inside {
-            // Only peek on hover, and only after the pointer has settled —
-            // without the delay the shelf twitches every time someone crosses
-            // the top of the screen on the way to a menu.
             guard stage == .collapsed else { return }
             hoverTimer = Timer.scheduledTimer(withTimeInterval: Self.hoverIntent, repeats: false) { [weak self] _ in
-                self?.setStage(.peek)
+                guard let self = self, self.pointerIsInside else { return }
+                self.setStage(.peek)
             }
         } else {
-            setStage(.collapsed)
+            // Hysteresis on the way out, so a wobble near the edge doesn't
+            // collapse a panel the user is still reading.
+            hoverTimer = Timer.scheduledTimer(withTimeInterval: Self.hoverExitGrace, repeats: false) { [weak self] _ in
+                guard let self = self, !self.pointerIsInside else { return }
+                self.setStage(.collapsed)
+            }
         }
+    }
+
+    /// The hover zone, in screen coordinates.
+    ///
+    /// Deliberately a FIXED rectangle — the peek footprint — rather than the
+    /// shelf that is actually drawn. Testing against the drawn shelf meant the
+    /// zone shrank underneath the pointer while the collapse animated, which
+    /// flipped hover off, which collapsed it further: the flicker. A constant
+    /// zone cannot do that. Once expanded the zone grows to the open panel so
+    /// you can move around inside it.
+    private func hoverZone() -> NSRect {
+        guard let window = window, let screen = window.screen ?? NSScreen.main else { return .zero }
+        let size = stage == .expanded
+            ? shelfSize(on: screen, stage: .expanded)
+            : shelfSize(on: screen, stage: .peek)
+        return NSRect(x: screen.frame.midX - size.width / 2,
+                      y: screen.frame.maxY - size.height,
+                      width: size.width, height: size.height)
     }
 
     func setStage(_ newStage: Stage) {
         guard newStage != stage, let window = window,
               let screen = window.screen ?? NSScreen.main else { return }
-        let growing = newStage != .collapsed && stage == .collapsed || newStage == .expanded
         stage = newStage
-        let target = frame(on: screen, stage: newStage)
+        let shelf = shelfSize(on: screen, stage: newStage)
 
         // Spring, not a duration curve. Opening overshoots slightly so the
         // shelf reads as one piece of material stretching; closing does not,
         // because a shelf that bounces shut looks like a bug.
-        NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = growing ? 0.30 : 0.20
-            ctx.timingFunction = growing
-                ? CAMediaTimingFunction(controlPoints: 0.22, 1.2, 0.3, 1)
-                : CAMediaTimingFunction(name: .easeIn)
-            ctx.allowsImplicitAnimation = true
-            window.animator().setFrame(target, display: true)
-        }
-        hostView?.setStage(newStage, size: target.size)
+        _ = window
+        hostView?.setStage(newStage, shelf: shelf)
         refresh()
     }
 
@@ -196,14 +245,8 @@ final class NotchCommandCentre {
     private func resizeForMode() {
         guard isExpanded, let window = window,
               let screen = window.screen ?? NSScreen.main else { return }
-        let target = frame(on: screen, stage: .expanded)
-        NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = 0.2
-            ctx.timingFunction = CAMediaTimingFunction(controlPoints: 0.22, 1.1, 0.3, 1)
-            ctx.allowsImplicitAnimation = true
-            window.animator().setFrame(target, display: true)
-        }
-        hostView?.setStage(.expanded, size: target.size)
+        _ = window
+        hostView?.setStage(.expanded, shelf: shelfSize(on: screen, stage: .expanded))
         refresh()
     }
 

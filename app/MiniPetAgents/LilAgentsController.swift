@@ -305,8 +305,11 @@ final class PetAgentsController {
         // (Pets pass through each other on the dock — no greet-on-collision,
         //  no sibling separation.)
 
-        // Keep the shelf in step with the pets. It only redraws when something
-        // it shows has actually changed, so this is cheap per tick.
+        // Keep the shelf in step with the pets, and drive its hover from the
+        // live pointer rather than tracking areas — tracking areas are tied to
+        // the view's geometry, so every size change churned them into a
+        // flicker loop.
+        notch?.updateHover(pointer: NSEvent.mouseLocation)
         notch?.refresh()
 
         let sorted = activeChars.sorted { $0.positionProgress < $1.positionProgress }
