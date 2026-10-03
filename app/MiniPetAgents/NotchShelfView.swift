@@ -89,6 +89,8 @@ final class NotchShelfView: NSView {
     /// tells you what happened, so it should also be the way in to the thing
     /// that happened.
     var onOpenRow: ((String) -> Void)?
+    /// Pets mode changed depth, so the panel needs to resize.
+    var onFocusChanged: ((Bool) -> Void)?
     private var stage: NotchCommandCentre.Stage = .collapsed
     /// The hardware notch in this view's coordinates, when there is one.
     /// Nothing drawn inside it renders, so every layout that sits in the
@@ -174,6 +176,14 @@ final class NotchShelfView: NSView {
     private(set) var activeWord: String = ""
     private(set) var activeCaption: String = ""
     private(set) var chat: [ChatLine] = []
+    /// Provider and working directory for the pet at the front — the line
+    /// that belongs to *choosing* a pet, as opposed to watching one work.
+    private(set) var activeSubtitle: String = ""
+    /// Pets mode has two depths: the roster, and one pet opened up. Choosing
+    /// and watching are different jobs, and showing both at once made the
+    /// selector look like a status panel that happened to have a row of pets
+    /// above it.
+    private(set) var petFocused = false
     /// 0→1 after the panel opens. Drives the staggered arrival so the roster
     /// assembles rather than snapping into place.
     private var appear: CGFloat = 0
@@ -243,10 +253,18 @@ final class NotchShelfView: NSView {
         needsDisplay = true
     }
 
-    func update(word: String, caption: String) {
+    func update(word: String, caption: String, subtitle: String = "") {
         activeWord = word
         activeCaption = caption
+        activeSubtitle = subtitle
         needsDisplay = true
+    }
+
+    func setPetFocused(_ value: Bool) {
+        guard value != petFocused else { return }
+        petFocused = value
+        restartAppear()
+        onFocusChanged?(value)
     }
 
     /// Replays whenever the panel opens or the mode changes, so content
@@ -326,8 +344,18 @@ final class NotchShelfView: NSView {
         // Clicking a pet in the character select makes it active.
         guard mode == .pets, !entries.isEmpty else { return }
         if let hit = slots().first(where: { $0.rect.insetBy(dx: -4, dy: -4).contains(point) }) {
-            if hit.index == activeIndex { onOpenPet?(entries[hit.index].slug) }
-            else { select(hit.index) }
+            if hit.index == activeIndex { setPetFocused(!petFocused) }
+            else {
+                select(hit.index)
+                // Switching pets while one is open keeps you at that depth —
+                // you are comparing what each is doing, not starting over.
+            }
+            return
+        }
+        // Clicking the open detail goes through to the conversation.
+        if petFocused, mode == .pets, detailRect().contains(point),
+           entries.indices.contains(activeIndex) {
+            onOpenPet?(entries[activeIndex].slug)
         }
     }
 
@@ -630,7 +658,7 @@ final class NotchShelfView: NSView {
         let n = entries.count
         guard n > 0 else { return [] }
         let body = bodyRect()
-        let baseline = body.minY + Self.rowCentre(in: body)
+        let baseline = body.minY + Self.rowCentre(in: body, focused: petFocused)
         let spacing: CGFloat = 78
         let centre = Int(carousel.rounded())
 
@@ -750,11 +778,12 @@ final class NotchShelfView: NSView {
     /// bottom edge, so the row, the selection bar, the name and the status
     /// pairing can't drift into each other — which they did when each was
     /// derived separately and the name landed on top of the word.
-    private static func rowCentre(in body: NSRect) -> CGFloat { body.height - 84 }
-    private static let barY: CGFloat = 80
-    private static let nameY: CGFloat = 72
-    private static let wordY: CGFloat = 50
-    private static let captionY: CGFloat = 25
+    private static func rowCentre(in body: NSRect, focused: Bool) -> CGFloat {
+        body.height - (focused ? 54 : 62)
+    }
+    private static let nameY: CGFloat = 36
+    /// With the detail card open the roster slides up to make room for it.
+    private static let focusedNameY: CGFloat = 126
 
     /// The elevated card every body sits on.
     private func bodyRect() -> NSRect {
@@ -764,6 +793,13 @@ final class NotchShelfView: NSView {
                       width: b.width - 28, height: top - (b.minY + 12))
     }
 
+    /// The detail card, when a pet is opened up.
+    private func detailRect() -> NSRect {
+        let body = bodyRect()
+        return NSRect(x: body.minX + 10, y: body.minY + 10,
+                      width: body.width - 20, height: 78)
+    }
+
     private func drawExpanded(_ ctx: CGGraphicsContextAlias) {
         let body = bodyRect()
         card(body, alpha: appear * bodyAlpha)
@@ -771,12 +807,8 @@ final class NotchShelfView: NSView {
         for slot in slots() {
             let t = stagger(Int(slot.distance.rounded()))
             guard t > 0.01 else { continue }
-            // Opacity falls off continuously with distance too, so nothing
-            // pops as it passes the front.
             let base = max(0.26, 1 - slot.distance * 0.36)
             let lifted = slot.rect.offsetBy(dx: 0, dy: (1 - t) * -10)
-            // The halo belongs to whatever is at the front, fading as the row
-            // moves so it travels with the selection instead of jumping.
             if slot.distance < 1 {
                 glow(NSPoint(x: lifted.midX, y: lifted.midY),
                      radius: lifted.width * 1.15, colour: entries[slot.index].tint,
@@ -784,9 +816,6 @@ final class NotchShelfView: NSView {
             }
             draw(entries[slot.index], in: lifted, lit: slot.distance < 0.5,
                  alpha: base * t * bodyAlpha, ctx: ctx)
-            // Only the front pet carries its mark. On the others it would be
-            // five badges competing at 10pt, which is the logo soup the design
-            // deliberately avoids.
             if slot.distance < 0.6 {
                 drawSigil(entries[slot.index], on: lifted,
                           alpha: (1 - slot.distance / 0.6) * t * bodyAlpha)
@@ -798,24 +827,47 @@ final class NotchShelfView: NSView {
         guard t > 0.01 else { return }
         let front = entries[activeIndex]
         let lift = (1 - stagger(3)) * 8
+        let nameY = petFocused ? Self.focusedNameY : Self.nameY
 
-        // A short bar in the pet's own colour under the front slot, as the
-        // design has it — it anchors the selection without drawing a box.
         let barW: CGFloat = 32
         let bar = NSRect(x: body.midX - barW / 2,
-                         y: body.minY + Self.barY - lift, width: barW, height: 3)
+                         y: body.minY + nameY + 8 - lift, width: barW, height: 3)
         front.tint.withAlphaComponent(0.9 * t).setFill()
         NSBezierPath(roundedRect: bar, xRadius: 1.5, yRadius: 1.5).fill()
 
-        text(front.slug, 11.5, .semibold, NSColor(white: 0.78, alpha: t),
-             at: NSPoint(x: body.minX, y: body.minY + Self.nameY - lift),
+        // Who this is, and where it runs — the two things you need while
+        // choosing. What it is *doing* only appears once you open it.
+        text(front.slug, 12.5, .semibold, NSColor(white: 0.9, alpha: t),
+             at: NSPoint(x: body.minX, y: body.minY + nameY - lift),
              maxWidth: body.width, centred: true)
-        text(activeWord, 21, .semibold, NSColor(white: 1, alpha: t),
-             at: NSPoint(x: body.minX, y: body.minY + Self.wordY - lift),
-             maxWidth: body.width, centred: true)
-        text(activeCaption, 12, .regular, NSColor(white: 0.52, alpha: t),
-             at: NSPoint(x: body.minX, y: body.minY + Self.captionY - lift),
-             maxWidth: body.width, centred: true)
+        if !activeSubtitle.isEmpty {
+            text(activeSubtitle, 11, .regular, NSColor(white: 0.48, alpha: t),
+                 at: NSPoint(x: body.minX, y: body.minY + nameY - 18 - lift),
+                 maxWidth: body.width, centred: true)
+        }
+
+        guard petFocused else { return }
+        let detail = detailRect()
+        let dt = stagger(4) * bodyAlpha
+        guard dt > 0.01 else { return }
+        NSColor(white: 0.125, alpha: dt).setFill()
+        NSBezierPath(roundedRect: detail.offsetBy(dx: 0, dy: (1 - stagger(4)) * -8),
+                     xRadius: 18, yRadius: 18).fill()
+
+        let d = detail.offsetBy(dx: 0, dy: (1 - stagger(4)) * -8)
+        let avatar = NSRect(x: d.minX + 16, y: d.midY - 23, width: 46, height: 46)
+        glow(NSPoint(x: avatar.midX, y: avatar.midY), radius: 40,
+             colour: front.tint, alpha: 0.5 * dt)
+        draw(front, in: avatar, lit: true, alpha: dt, ctx: ctx)
+
+        let tx = avatar.maxX + 16
+        text(activeWord, 19, .semibold, NSColor(white: 1, alpha: dt),
+             at: NSPoint(x: tx, y: d.maxY - 16), maxWidth: d.width - 120)
+        text(activeCaption, 12.5, .regular, NSColor(white: 0.62, alpha: dt),
+             at: NSPoint(x: tx, y: d.maxY - 38), maxWidth: d.width - 120)
+        text("Open conversation →", 11, .semibold, NSColor(white: 0.5, alpha: dt),
+             at: NSPoint(x: d.maxX - 150 - 16, y: d.midY + 5),
+             maxWidth: 150, rightAligned: true)
     }
 
     // MARK: chat
@@ -826,6 +878,35 @@ final class NotchShelfView: NSView {
     private func drawChat() {
         let body = bodyRect()
         card(body, alpha: appear * bodyAlpha)
+
+        // Whose thread this is. Without it the panel is a conversation with
+        // nobody — and the roster is one mode away, so there is no other cue.
+        var top = body.maxY - 10
+        if entries.indices.contains(activeIndex) {
+            let pet = entries[activeIndex]
+            let a = appear * bodyAlpha
+            let avatar = NSRect(x: body.minX + 14, y: top - 30, width: 28, height: 28)
+            draw(pet, in: avatar, lit: false, alpha: a, ctx: NSGraphicsContext.current!.cgContext)
+            if let kind = pet.provider {
+                let d: CGFloat = 11
+                let disc = NSRect(x: avatar.maxX - 4, y: avatar.minY - 1, width: d, height: d)
+                NSColor.black.withAlphaComponent(0.95 * a).setFill()
+                NSBezierPath(ovalIn: disc.insetBy(dx: -1.2, dy: -1.2)).fill()
+                kind.brandColor.withAlphaComponent(a).setFill()
+                NSBezierPath(ovalIn: disc).fill()
+            }
+            text(pet.slug, 12.5, .semibold, NSColor(white: 0.9, alpha: a),
+                 at: NSPoint(x: avatar.maxX + 12, y: top - 6), maxWidth: 220)
+            if !activeSubtitle.isEmpty {
+                text(activeSubtitle, 10.5, .regular, NSColor(white: 0.46, alpha: a),
+                     at: NSPoint(x: avatar.maxX + 12, y: top - 21), maxWidth: 260)
+            }
+            // Hairline under the header, so the transcript reads as its own area.
+            NSColor(white: 1, alpha: 0.07 * a).setFill()
+            NSBezierPath(rect: NSRect(x: body.minX + 14, y: avatar.minY - 10,
+                                      width: body.width - 28, height: 1)).fill()
+            top = avatar.minY - 10
+        }
 
         // Composer sits on the floor of the card, where a reply would be typed.
         let field = NSRect(x: body.minX + 14, y: body.minY + 12,
@@ -849,7 +930,7 @@ final class NotchShelfView: NSView {
         guard !chat.isEmpty else {
             text("No conversation yet.", 13, .regular,
                  NSColor(white: 0.44, alpha: appear * bodyAlpha),
-                 at: NSPoint(x: body.minX + 18, y: body.maxY - 20), maxWidth: body.width - 36)
+                 at: NSPoint(x: body.minX + 18, y: top - 14), maxWidth: body.width - 36)
             return
         }
 
@@ -861,7 +942,7 @@ final class NotchShelfView: NSView {
             guard t > 0.01 else { break }
             let maxW = body.width - 56
             let h = max(22, ceil(textHeight(line.text, 13, maxW - 24)) + 16)
-            guard y + h < body.maxY - 8 else { break }
+            guard y + h < top - 6 else { break }
             let w = min(maxW, textWidth(line.text, 13) + 26)
             let bubble = NSRect(x: line.isUser ? body.maxX - 18 - w : body.minX + 18,
                                 y: y + (1 - t) * -6, width: w, height: h)

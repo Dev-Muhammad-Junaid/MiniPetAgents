@@ -35,11 +35,13 @@ final class NotchCommandCentre {
     private static let expandedWidth: CGFloat = 620
     /// Activity needs room for several rows; Pets does not. Height follows the
     /// mode so neither one is padded out to fit the other.
-    private static func expandedHeight(for mode: NotchShelfView.Mode) -> CGFloat {
+    private static func expandedHeight(for mode: NotchShelfView.Mode,
+                                       focused: Bool = false) -> CGFloat {
         switch mode {
         case .activity: return 326
         case .chat:     return 300
-        case .pets:     return 262
+        // Selection only needs the roster; opening a pet adds its detail card.
+        case .pets:     return focused ? 308 : 214
         }
     }
     /// Hover has to be deliberate — without a delay the shelf flickers open
@@ -165,7 +167,8 @@ final class NotchCommandCentre {
             h = max(Self.restingHeight, notchH)
         case .expanded:
             w = Self.expandedWidth
-            h = Self.expandedHeight(for: hostView?.mode ?? .pets)
+            h = Self.expandedHeight(for: hostView?.mode ?? .pets,
+                                    focused: hostView?.petFocused ?? false)
         }
         // Pinned to the very top of the full frame, not visibleFrame: the
         // shelf must run under the menu bar to meet the notch.
@@ -204,7 +207,11 @@ final class NotchCommandCentre {
         win.ignoresMouseEvents = true
 
         let view = NotchShelfView(frame: NSRect(origin: .zero, size: win.frame.size))
-        view.onModeChanged = { [weak self] _ in self?.resizeForMode() }
+        view.onModeChanged = { [weak self] _ in
+            self?.hostView?.setPetFocused(false)
+            self?.resizeForMode()
+        }
+        view.onFocusChanged = { [weak self] _ in self?.resizeForMode() }
         // A click is what opens the panel. Hover only ever peeks.
         view.onOpenPet = { [weak self] slug in
             // Clicking the pet that is already at the front opens its
@@ -322,7 +329,8 @@ final class NotchCommandCentre {
         if NotchDemoData.isEnabled {
             view.update(entries: NotchDemoData.entries())
             view.update(rows: NotchDemoData.rows(), summary: NotchDemoData.summary)
-            view.update(word: NotchDemoData.word, caption: NotchDemoData.caption)
+            view.update(word: NotchDemoData.word, caption: NotchDemoData.caption,
+                        subtitle: NotchDemoData.subtitle)
             view.update(chat: NotchDemoData.chat())
             return
         }
@@ -360,8 +368,12 @@ final class NotchCommandCentre {
         }
         if let active = controller.characters.first {
             let live = store.live.first { $0.petSlug == active.petSlug }
+            let dir = PetLibrary.preferredWorkingDirectory(for: active.petSlug)?
+                .path.replacingOccurrences(of: NSHomeDirectory(), with: "~")
             view.update(word: live == nil ? "Idle" : "Working",
-                        caption: live?.activity ?? active.resolvedProvider.displayName)
+                        caption: live?.activity ?? "Nothing in flight",
+                        subtitle: [active.resolvedProvider.displayName, dir]
+                            .compactMap { $0 }.joined(separator: " · "))
         }
         let totals = store.totals()
         view.update(rows: Array(rows),
