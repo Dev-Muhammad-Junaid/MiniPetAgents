@@ -214,6 +214,13 @@ final class NotchCommandCentre {
             self?.controller?.characters.first { $0.petSlug == slug }.map { _ in }
         }
         view.onQuit = { NSApp.terminate(nil) }
+        view.onOpenRow = { [weak self] slug in
+            // Jump the carousel to that pet and open its thread, so the feed
+            // is a way in rather than a dead end.
+            guard let self = self, let view = self.hostView else { return }
+            if let i = view.entries.firstIndex(where: { $0.slug == slug }) { view.select(i) }
+            view.setMode(.chat)
+        }
         view.onActivate = { [weak self] in
             guard let self = self else { return }
             if self.stage != .expanded { self.setStage(.expanded) }
@@ -342,6 +349,8 @@ final class NotchCommandCentre {
             NotchShelfView.ActivityRow(
                 name: record.petSlug,
                 provider: record.provider.displayName,
+                providerKind: record.provider,
+                slug: record.petSlug,
                 activity: record.activity,
                 state: record.state,
                 trailing: Self.trailing(for: record),

@@ -60,6 +60,11 @@ final class NotchShelfView: NSView {
     struct ActivityRow {
         let name: String
         let provider: String
+        /// For the shoulder disc. The feed names the provider in text too, so
+        /// this is reinforcement rather than the only signal.
+        var providerKind: AgentProvider?
+        /// The pet this row belongs to, so clicking it can open that pet.
+        var slug: String = ""
         let activity: String
         let state: ActivityStore.Record.State
         let trailing: String       // duration and usage, already formatted
@@ -80,6 +85,10 @@ final class NotchShelfView: NSView {
     /// flow, rather than re-selecting what is already selected.
     var onOpenPet: ((String) -> Void)?
     var onQuit: (() -> Void)?
+    /// Clicking a row in the feed jumps to that pet's conversation — the feed
+    /// tells you what happened, so it should also be the way in to the thing
+    /// that happened.
+    var onOpenRow: ((String) -> Void)?
     private var stage: NotchCommandCentre.Stage = .collapsed
     /// The hardware notch in this view's coordinates, when there is one.
     /// Nothing drawn inside it renders, so every layout that sits in the
@@ -134,6 +143,20 @@ final class NotchShelfView: NSView {
             x += w + 4
         }
         return out
+    }
+
+    /// Where each feed row sits once settled. Derived rather than recorded
+    /// during drawing, so a click can't land on a row that has since moved —
+    /// the same mistake the rail made.
+    private func rowFrames() -> [(ActivityRow, NSRect)] {
+        let body = bodyRect()
+        let rowHeight: CGFloat = 44
+        let top = body.maxY - 6
+        let fits = max(0, Int((top - body.minY - 4) / rowHeight))
+        return rows.prefix(fits).enumerated().map { i, row in
+            (row, NSRect(x: body.minX, y: top - CGFloat(i + 1) * rowHeight,
+                         width: body.width, height: rowHeight))
+        }
     }
 
     /// Quit lives at the far right of the chrome, so the shelf is a place you
@@ -292,6 +315,12 @@ final class NotchShelfView: NSView {
         // the word, not the capsule.
         if let hit = railFrames().first(where: { $0.1.insetBy(dx: -2, dy: -8).contains(point) }) {
             setMode(hit.0)
+            return
+        }
+        if mode == .activity,
+           let row = rowFrames().first(where: { $0.1.contains(point) })?.0,
+           !row.slug.isEmpty {
+            onOpenRow?(row.slug)
             return
         }
         // Clicking a pet in the character select makes it active.
@@ -931,6 +960,15 @@ final class NotchShelfView: NSView {
             arc.lineCapStyle = .round
             row.tint.withAlphaComponent(0.95 * alpha).setStroke()
             arc.stroke()
+        }
+
+        if let kind = row.providerKind {
+            let d: CGFloat = 11
+            let disc = NSRect(x: avatar.maxX - 4, y: avatar.minY - 1, width: d, height: d)
+            NSColor.black.withAlphaComponent(0.95 * alpha).setFill()
+            NSBezierPath(ovalIn: disc.insetBy(dx: -1.2, dy: -1.2)).fill()
+            kind.brandColor.withAlphaComponent(alpha).setFill()
+            NSBezierPath(ovalIn: disc).fill()
         }
 
         let textX = body.minX + 58

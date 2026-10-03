@@ -66,31 +66,25 @@ enum NotchDemoData {
         func frames(_ i: Int) -> [NSImage] { i < packs.count ? packs[i].frames : [] }
         func fps(_ i: Int) -> Double { i < packs.count ? packs[i].fps : 8 }
 
+        func row(_ i: Int, _ provider: AgentProvider, _ activity: String,
+                 _ state: ActivityStore.Record.State, _ trailing: String,
+                 _ tint: NSColor, remedy: String? = nil, live: Bool = false)
+        -> NotchShelfView.ActivityRow {
+            NotchShelfView.ActivityRow(
+                name: name(i), provider: provider.displayName,
+                providerKind: provider, slug: name(i),
+                activity: activity, state: state, trailing: trailing,
+                remedy: remedy, tint: tint, image: image(i),
+                frames: live ? frames(i) : [], fps: fps(i))
+        }
+
         return [
-            .init(name: name(0), provider: "Claude",
-                  activity: "Spelunking · running the test suite",
-                  state: .live, trailing: "14s · 2.1k", remedy: nil,
-                  tint: calm, image: image(0), frames: frames(0), fps: fps(0)),
-            .init(name: name(1), provider: "Codex",
-                  activity: "Percolating · reading the diff",
-                  state: .live, trailing: "9s · 840", remedy: nil,
-                  tint: good, image: image(1), frames: frames(1), fps: fps(1)),
-            .init(name: name(2), provider: "Cursor",
-                  activity: "Bash · npm run build",
-                  state: .done, trailing: "1m 12s · 8.4k · $0.11", remedy: nil,
-                  tint: good, image: image(2)),
-            .init(name: name(3), provider: "Copilot",
-                  activity: "Not signed in to Copilot",
-                  state: .failed, trailing: "—", remedy: "Sign in",
-                  tint: bad, image: image(3)),
-            .init(name: name(4), provider: "Claude",
-                  activity: "Replied",
-                  state: .done, trailing: "3m 04s · 22k · $0.28", remedy: nil,
-                  tint: good, image: image(4)),
-            .init(name: name(0), provider: "Codex",
-                  activity: "Interrupted — the app quit mid-turn",
-                  state: .interrupted, trailing: "41s", remedy: nil,
-                  tint: NSColor(white: 0.55, alpha: 1), image: image(0)),
+            row(0, .claude,  "Spelunking · running the test suite", .live, "14s · 2.1k", calm, live: true),
+            row(1, .codex,   "Percolating · reading the diff",      .live, "9s · 840",   good, live: true),
+            row(2, .cursor,  "Bash · npm run build",                .done, "1m 12s · 8.4k · $0.11", good),
+            row(3, .copilot, "Not signed in to Copilot",            .failed, "—",        bad, remedy: "Sign in"),
+            row(4, .claude,  "Replied",                             .done, "3m 04s · 22k · $0.28", good),
+            row(0, .codex,   "Interrupted — the app quit mid-turn", .interrupted, "41s", NSColor(white: 0.55, alpha: 1)),
         ]
     }
 
